@@ -319,6 +319,61 @@ test('icon size: defaults to 64, resizes existing icons, and 0 delegates to Dash
     ext.disable();
 });
 
+test('dock width: animates growth and shrink, then restores natural sizing', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const dock = ext._dock;
+    const box = {
+        _width: 400,
+        _natural: 400,
+        eases: [],
+        get_width() {
+            return this._width;
+        },
+        set_width(w) {
+            this._width = w < 0 ? this._natural : w;
+        },
+        remove_all_transitions() {},
+        get_preferred_width() {
+            return [0, this._natural];
+        },
+        ease(params) {
+            this.eases.push(params);
+            this._width = params.width;
+            params.onStopped?.();
+        },
+    };
+    dock._box = box;
+
+    // Adding an app widens the box.
+    box._natural = 480;
+    dock._redisplay();
+    assertEqual(box.eases.length, 1, 'width animated when growing');
+    assertEqual(box.eases[0].width, 480, 'grows to the new natural width');
+    assertEqual(box.eases[0].duration, 150, 'uses the dock animation time');
+    assertEqual(box._width, 480, 'natural sizing restored after the animation');
+
+    // Removing it shrinks the box.
+    box._natural = 400;
+    dock._redisplay();
+    assertEqual(box.eases.length, 2, 'width animated when shrinking');
+    assertEqual(box.eases[1].width, 400, 'shrinks to the new natural width');
+
+    // No layout change: no animation.
+    dock._redisplay();
+    assertEqual(box.eases.length, 2, 'no animation without a width change');
+
+    // The overview keeps its native item animations only.
+    mocks.env.overviewVisible = true;
+    box._natural = 480;
+    dock._redisplay();
+    assertEqual(box.eases.length, 2, 'no width animation in the overview');
+
+    ext.disable();
+});
+
 test('trash: setting toggles the item and the icon reflects the trash state', () => {
     mocks.resetEnv(schemaDir);
     assertEqual(mocks.env.settings.get_boolean('show-trash'), true,

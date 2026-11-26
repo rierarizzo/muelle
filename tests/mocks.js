@@ -279,6 +279,9 @@ export const MockDash = GObject.registerClass({
     _endItemDrag() {
         this.endItemDragCalls++;
     }
+
+    _redisplay() {
+    }
 });
 
 export const MockDashItemContainer = GObject.registerClass(

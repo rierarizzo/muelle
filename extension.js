@@ -321,8 +321,45 @@ class Dock extends Dash.Dash {
     }
 
     _redisplay() {
+        const box = this._box;
+        const oldWidth = box?.get_width?.() ?? 0;
+        const animate = oldWidth > 0 && box?.set_width && !Main.overview.visible;
+
+        // The dash container and its background follow the box width, so
+        // animating the box alone resizes the whole dock smoothly.
+        if (animate) {
+            box.remove_all_transitions();
+            box.set_width(oldWidth);
+        }
+
         super._redisplay();
+
+        if (animate) {
+            box.set_width(-1);
+            const [, target] = box.get_preferred_width(-1);
+            this._animateDockWidth(oldWidth, target);
+        }
+
         this._scheduleMinimizeGeometryUpdate();
+    }
+
+    _animateDockWidth(oldWidth, newWidth) {
+        const box = this._box;
+        if (!box || oldWidth <= 0 || newWidth <= 0 || newWidth === oldWidth) {
+            box?.set_width(-1);
+            return;
+        }
+
+        box.set_width(oldWidth);
+        box.ease({
+            width: newWidth,
+            duration: ANIMATION_TIME,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onStopped: () => {
+                box.set_width(-1);
+                this._scheduleMinimizeGeometryUpdate();
+            },
+        });
     }
 
     // The native Dash derives the icon size from the dock height and stops at
