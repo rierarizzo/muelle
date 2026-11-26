@@ -9,6 +9,7 @@
 */
 
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
@@ -19,6 +20,8 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Dash from 'resource:///org/gnome/shell/ui/dash.js';
 import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 
@@ -34,6 +37,52 @@ const Mode = Object.freeze({
     ON: 'on',
     INTELLIGENT: 'intelligent',
     OFF: 'off',
+});
+
+const TRASH_URI = 'trash:///';
+const TRASH_UPDATE_DELAY = 300; // ms
+
+
+const TrashItem = GObject.registerClass(
+class TrashItem extends Dash.DashItemContainer {
+    _init(iconSize) {
+        super._init();
+
+        this._icon = new St.Icon({
+            icon_name: 'user-trash',
+            icon_size: iconSize,
+            style_class: 'show-apps-icon',
+        });
+
+        const iconBox = new St.Bin({
+            style_class: 'overview-icon',
+            x_expand: true,
+            y_expand: true,
+        });
+        iconBox.set_child(this._icon);
+
+        this.button = new St.Button({
+            style_class: 'show-apps',
+            track_hover: true,
+            can_focus: true,
+        });
+        this.button.child = iconBox;
+
+        this.setChild(this.button);
+        this.setLabelText('Trash');
+    }
+
+    setIconSize(size) {
+        if (this._icon.icon_size === size)
+            return;
+        this._icon.icon_size = size;
+    }
+
+    setIconName(name) {
+        if (this._icon.icon_name === name)
+            return;
+        this._icon.icon_name = name;
+    }
 });
 
 
@@ -173,6 +222,10 @@ class Dock extends Dash.Dash {
             () => this._onModeChanged(), this);
         this._settings.connectObject('changed::dock-icon-size',
             () => this._adjustIconSize(), this);
+        this._settings.connectObject('changed::show-trash',
+            () => this._updateTrashVisibility(), this);
+
+        this._initTrash();
 
         Main.overview.connectObject('showing', () => {
             this._cancelUpdate();
@@ -289,10 +342,178 @@ class Dock extends Dash.Dash {
             item.child?._delegate?.icon?.setIconSize(size);
         }
         this._showAppsIcon?.icon?.setIconSize(size);
+        this._trashItem?.setIconSize(size);
+        if (this._trashSeparator)
+            this._trashSeparator.height = size;
         if (this._separator)
             this._separator.height = size;
 
         this.emit('icon-size-changed');
+    }
+
+    _initTrash() {
+        this._trashItem = new TrashItem(this.iconSize);
+        this._trashItem.button.connect('clicked', () => this._openTrash());
+        this._trashItem.button.connect('popup-menu', () => this._trashMenu.toggle());
+        this._hookUpLabel(this._trashItem);
+
+        this._trashSeparator = new St.Widget({
+            style_class: 'dash-separator',
+            y_align: Clutter.ActorAlign.CENTER,
+            height: this.iconSize,
+        });
+        this._trashSeparator.set_style('margin-bottom: 0;');
+
+        this._dashContainer.add_child(this._trashSeparator);
+        this._dashContainer.add_child(this._trashItem);
+        this._trashItem.show(false);
+        // Keep Show Apps as the last icon; utilities sit just before it.
+        this._dashContainer.set_child_at_index(
+            this._showAppsIcon,
+            this._dashContainer.get_children().length - 1);
+
+        this._trashMenu = new PopupMenu.PopupMenu(
+            this._trashItem.button, 0.5, St.Side.BOTTOM);
+        this._trashMenu.actor.hide();
+        Main.uiGroup.add_child(this._trashMenu.actor);
+
+        this._trashMenuManager =
+            new PopupMenu.PopupMenuManager(this._trashItem.button);
+        this._trashMenuManager.addMenu(this._trashMenu);
+
+        const openItem = new PopupMenu.PopupMenuItem('Open Trash');
+        openItem.connect('activate', () => this._openTrash());
+        this._trashMenu.addMenuItem(openItem);
+
+        this._emptyTrashMenuItem = new PopupMenu.PopupMenuItem('Empty Trash');
+        this._emptyTrashMenuItem.connect('activate', () => this._emptyTrash());
+        this._trashMenu.addMenuItem(this._emptyTrashMenuItem);
+
+        this._trashMenu.connect('open-state-changed', (menu, open) =>
+            this._itemMenuStateChanged(this._trashItem, open));
+
+        const rightClick = new Clutter.ClickGesture({
+            required_button: Clutter.BUTTON_SECONDARY,
+            recognize_on_press: true,
+        });
+        rightClick.connect('recognize', () => this._trashMenu.toggle());
+        this._trashItem.button.add_action(rightClick);
+
+        this._trash = Gio.File.new_for_uri(TRASH_URI);
+        this._trashMonitor = null;
+        this._trashMonitorChangedId = 0;
+        this._trashUpdateTimeoutId = 0;
+        this._emptyTrashDialog = null;
+        try {
+            this._trashMonitor = this._trash.monitor_directory(
+                Gio.FileMonitorFlags.NONE, null);
+            this._trashMonitorChangedId = this._trashMonitor.connect(
+                'changed', () => this._scheduleTrashUpdate());
+        } catch (e) {
+            logError(e, 'Unable to monitor the Trash');
+        }
+
+        this._updateTrash();
+        this._updateTrashVisibility();
+    }
+
+    _updateTrashVisibility() {
+        const visible = this._settings.get_boolean('show-trash');
+        this._trashItem.visible = visible;
+        this._trashSeparator.visible = visible;
+        if (!visible)
+            this._trashMenu.close();
+    }
+
+    _scheduleTrashUpdate() {
+        if (!this._trashItem || this._trashUpdateTimeoutId)
+            return;
+
+        this._trashUpdateTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, TRASH_UPDATE_DELAY, () => {
+                this._trashUpdateTimeoutId = 0;
+                this._updateTrash();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _updateTrash() {
+        if (!this._trashItem)
+            return;
+
+        let count = 0;
+        try {
+            const info = this._trash.query_info(
+                Gio.FILE_ATTRIBUTE_TRASH_ITEM_COUNT,
+                Gio.FileQueryInfoFlags.NONE, null);
+            count = info.get_attribute_uint32(
+                Gio.FILE_ATTRIBUTE_TRASH_ITEM_COUNT);
+        } catch (e) {
+            logError(e, 'Unable to read the Trash');
+        }
+
+        this._trashItem.setIconName(
+            count > 0 ? 'user-trash-full' : 'user-trash');
+        this._emptyTrashMenuItem.setSensitive(count > 0);
+    }
+
+    _openTrash() {
+        if (Main.overview.visible)
+            Main.overview.hide();
+        Gio.AppInfo.launch_default_for_uri(TRASH_URI,
+            global.create_app_launch_context(0, -1));
+    }
+
+    _emptyTrash() {
+        if (this._emptyTrashDialog)
+            return;
+
+        const dialog = new ModalDialog.ModalDialog();
+        this._emptyTrashDialog = dialog;
+        dialog.connect('closed', () => {
+            if (this._emptyTrashDialog === dialog)
+                this._emptyTrashDialog = null;
+        });
+
+        dialog.contentLayout.add_child(new St.Label({
+            text: 'Permanently delete all items in the Trash?',
+            style_class: 'message-dialog-description',
+        }));
+
+        dialog.addButton({
+            label: 'Cancel',
+            default: true,
+            action: () => dialog.close(),
+        });
+        dialog.addButton({
+            label: 'Empty Trash',
+            action: () => {
+                dialog.close();
+                this._doEmptyTrash();
+            },
+        });
+        dialog.open();
+    }
+
+    _doEmptyTrash() {
+        try {
+            const proc = Gio.Subprocess.new(
+                ['gio', 'trash', '--empty'], Gio.SubprocessFlags.NONE);
+            proc.wait_check_async(null, (p, result) => {
+                try {
+                    p.wait_check_finish(result);
+                } catch (e) {
+                    logError(e, 'Unable to empty the Trash');
+                    Main.notify('Could not empty the Trash',
+                        'Open it and empty it manually.');
+                }
+                this._scheduleTrashUpdate();
+            });
+        } catch (e) {
+            logError(e, 'Unable to empty the Trash');
+            Main.notify('Could not empty the Trash',
+                'Open it and empty it manually.');
+        }
     }
 
     _currentMode() {
@@ -618,6 +839,27 @@ class Dock extends Dash.Dash {
             GLib.source_remove(this._resetHoverTimeoutId);
             this._resetHoverTimeoutId = 0;
         }
+
+        if (this._trashUpdateTimeoutId) {
+            GLib.source_remove(this._trashUpdateTimeoutId);
+            this._trashUpdateTimeoutId = 0;
+        }
+        if (this._trashMonitor) {
+            if (this._trashMonitorChangedId)
+                this._trashMonitor.disconnect(this._trashMonitorChangedId);
+            this._trashMonitor.cancel();
+            this._trashMonitor = null;
+            this._trashMonitorChangedId = 0;
+        }
+        this._trashMenu?.destroy();
+        this._trashMenu = null;
+        this._trashMenuManager = null;
+        this._emptyTrashDialog?.destroy();
+        this._emptyTrashDialog = null;
+        this._trashItem?.destroy();
+        this._trashItem = null;
+        this._trashSeparator?.destroy();
+        this._trashSeparator = null;
 
         if (this._revealStrip) {
             Main.layoutManager.removeChrome(this._revealStrip);

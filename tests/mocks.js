@@ -99,6 +99,8 @@ export const MockActor = GObject.registerClass({
         'enter-event': {},
         'leave-event': {},
         'scroll-event': {param_types: [GObject.TYPE_POINTER]},
+        'clicked': {},
+        'popup-menu': {},
     },
 }, class MockActor extends GObject.Object {
     _init(props = {}) {
@@ -154,6 +156,38 @@ export const MockActor = GObject.registerClass({
 
     set_width(w) {
         this._width = w;
+    }
+
+    set_child(child) {
+        this.child = child;
+    }
+
+    add_child(child) {
+        if (!this._children)
+            this._children = [];
+        this._children.push(child);
+    }
+
+    get_children() {
+        return this._children ?? [];
+    }
+
+    set_child_at_index(child, index) {
+        if (!this._children)
+            this._children = [];
+        const current = this._children.indexOf(child);
+        if (current !== -1)
+            this._children.splice(current, 1);
+        if (index < 0 || index >= this._children.length)
+            this._children.push(child);
+        else
+            this._children.splice(index, 0, child);
+    }
+
+    add_action(_action) {
+    }
+
+    set_style(_style) {
     }
 
     set_position(x, y) {
@@ -235,6 +269,9 @@ export const MockDash = GObject.registerClass({
         this.autoAdjustCalls++;
     }
 
+    _hookUpLabel(_item) {
+    }
+
     setMaxSize(_w, h) {
         this._maxHeight = h;
     }
@@ -244,11 +281,46 @@ export const MockDash = GObject.registerClass({
     }
 });
 
+export const MockDashItemContainer = GObject.registerClass(
+class MockDashItemContainer extends MockActor {
+    _init() {
+        super._init();
+        this.child = null;
+        this._labelText = '';
+    }
+
+    setChild(child) {
+        this.child = child;
+    }
+
+    setLabelText(text) {
+        this._labelText = text;
+    }
+
+    show() {
+    }
+
+    showLabel() {
+    }
+
+    hideLabel() {
+    }
+});
+
 // Provide GObject-backed classes/APIs expected by extension.js
 export const Clutter = {
     BUTTON_MIDDLE: 2,
+    BUTTON_SECONDARY: 3,
     ModifierType: {CONTROL_MASK: 1 << 2},
     AnimationMode: {EASE_OUT_QUAD: 1, EASE_IN_QUAD: 2},
+    ActorAlign: {CENTER: 0, START: 1, END: 2},
+    ClickGesture: class {
+        constructor() {
+        }
+
+        connect() {
+        }
+    },
     get_current_event: () => env.currentEvent,
 };
 
@@ -281,6 +353,11 @@ export const Mtk = {
 
 export const St = {
     Widget: MockActor,
+    Bin: MockActor,
+    Button: MockActor,
+    Icon: MockActor,
+    Label: MockActor,
+    Side: {TOP: 0, BOTTOM: 1, LEFT: 2, RIGHT: 3},
 };
 
 // Re-export real GLib and GObject so extension.js uses genuine timers & classes
@@ -404,6 +481,8 @@ export function resetEnv(schemaDir) {
         overview,
         layoutManager,
         wm,
+        uiGroup: new MockActor({name: 'uiGroup'}),
+        notify: () => {},
         queueDeferredWork: id => env.queuedDeferredWorks.push(id),
     };
 
@@ -435,6 +514,82 @@ export const Main = new Proxy({}, {
     },
 });
 
+class MockPopupMenu extends SimpleEmitter {
+    constructor(_sourceActor) {
+        super('popup-menu');
+        this.actor = new MockActor({name: 'popup-menu'});
+        this.menuItems = [];
+    }
+
+    addMenuItem(item) {
+        this.menuItems.push(item);
+    }
+
+    toggle() {
+    }
+
+    close() {
+    }
+
+    destroy() {
+        this.actor.destroy();
+    }
+}
+
+class MockPopupMenuItem extends SimpleEmitter {
+    constructor(label) {
+        super('popup-menu-item');
+        this.label = label;
+        this.sensitive = true;
+    }
+
+    setSensitive(sensitive) {
+        this.sensitive = sensitive;
+    }
+}
+
+class MockPopupMenuManager {
+    constructor(_owner) {
+    }
+
+    addMenu(menu) {
+        this.menu = menu;
+    }
+}
+
+export const PopupMenu = {
+    PopupMenu: MockPopupMenu,
+    PopupMenuItem: MockPopupMenuItem,
+    PopupMenuManager: MockPopupMenuManager,
+};
+
+class MockModalDialog extends SimpleEmitter {
+    constructor() {
+        super('modal-dialog');
+        this.contentLayout = new MockActor({name: 'modal-dialog-content'});
+        this.buttons = [];
+    }
+
+    addButton(info) {
+        this.buttons.push(info);
+    }
+
+    open() {
+    }
+
+    close() {
+        this.emit('closed');
+    }
+
+    destroy() {
+    }
+}
+
+export const ModalDialog = {
+    ModalDialog: MockModalDialog,
+};
+
 export const Dash = {
     Dash: MockDash,
+    DashItemContainer: MockDashItemContainer,
 };

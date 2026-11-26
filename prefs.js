@@ -85,6 +85,21 @@ export default class MuellePreferences extends ExtensionPreferences {
         group.add(sizeRow);
 
         page.add(group);
+
+        const itemsGroup = new Adw.PreferencesGroup({
+            title: 'Dock Items',
+        });
+        const trashRow = new Adw.SwitchRow({
+            title: 'Show Trash',
+            subtitle: 'Add a Trash item at the end of the dock',
+        });
+        trashRow.active = settings.get_boolean('show-trash');
+        trashRow.connect('notify::active', () => {
+            settings.set_boolean('show-trash', trashRow.active);
+        });
+        itemsGroup.add(trashRow);
+        page.add(itemsGroup);
+
         window.add(page);
     }
 }

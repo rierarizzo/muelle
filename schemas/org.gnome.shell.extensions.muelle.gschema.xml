@@ -8,6 +8,14 @@
 
   <schema id="org.gnome.shell.extensions.muelle"
           path="/org/gnome/shell/extensions/muelle/">
+    <key name="show-trash" type="b">
+      <default>true</default>
+      <summary>Show Trash</summary>
+      <description>
+        Show a Trash item at the end of the dock.
+      </description>
+    </key>
+
     <key name="dock-icon-size" type="i">
       <default>64</default>
       <range min="8" max="128"/>

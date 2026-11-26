@@ -116,7 +116,7 @@ async function loadExtension(repoRoot) {
     }
 
     source = source.replace(
-        /import \* as (Main|Dash|AppDisplay) from 'resource:\/\/\/org\/gnome\/shell\/ui\/[^']+';/g,
+        /import \* as (Main|Dash|AppDisplay|ModalDialog|PopupMenu) from 'resource:\/\/\/org\/gnome\/shell\/ui\/[^']+';/g,
         `import {$1} from '${mocksUrl}';`);
     source = source.replace(
         `'resource:///org/gnome/shell/extensions/extension.js'`,
@@ -315,6 +315,54 @@ test('icon size: defaults to 64, resizes existing icons, and 0 delegates to Dash
     dock._adjustIconSize();
     dock._settings = settings;
     assertEqual(dock.autoAdjustCalls, 1, 'legacy 0 delegates to the native Dash');
+
+    ext.disable();
+});
+
+test('trash: setting toggles the item and the icon reflects the trash state', () => {
+    mocks.resetEnv(schemaDir);
+    assertEqual(mocks.env.settings.get_boolean('show-trash'), true,
+        'trash shown by default');
+
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const dock = ext._dock;
+    assert(dock._trashItem !== null, 'trash item created');
+    assertEqual(dock._trashItem.visible, true, 'trash item visible');
+    assertEqual(dock._trashSeparator.visible, true, 'trash separator visible');
+
+    mocks.env.settings.set_boolean('show-trash', false);
+    flushMainLoop(20);
+    assertEqual(dock._trashItem.visible, false, 'trash hidden by setting');
+    assertEqual(dock._trashSeparator.visible, false, 'separator hidden by setting');
+
+    mocks.env.settings.set_boolean('show-trash', true);
+    flushMainLoop(20);
+    assertEqual(dock._trashItem.visible, true, 'trash restored by setting');
+
+    dock._trash = {query_info: () => ({get_attribute_uint32: () => 2})};
+    dock._updateTrash();
+    assertEqual(dock._trashItem._icon.icon_name, 'user-trash-full',
+        'full icon when trash has items');
+    assertEqual(dock._emptyTrashMenuItem.sensitive, true,
+        'empty action enabled when trash has items');
+
+    dock._trash = {query_info: () => ({get_attribute_uint32: () => 0})};
+    dock._updateTrash();
+    assertEqual(dock._trashItem._icon.icon_name, 'user-trash',
+        'empty icon when trash is empty');
+    assertEqual(dock._emptyTrashMenuItem.sensitive, false,
+        'empty action disabled when trash is empty');
+
+    dock._emptyTrash();
+    assert(dock._emptyTrashDialog !== null, 'confirmation dialog opened');
+    assertEqual(dock._emptyTrashDialog.buttons.length, 2,
+        'confirmation dialog has two actions');
+    assertEqual(dock._emptyTrashDialog.buttons[0].default, true,
+        'cancel is the default action');
+    dock._emptyTrashDialog.close();
+    assertEqual(dock._emptyTrashDialog, null, 'dialog cleared on close');
 
     ext.disable();
 });
