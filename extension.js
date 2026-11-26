@@ -513,10 +513,14 @@ export default class MuelleExtension extends Extension {
             if (openNewWindow) {
                 this.app.open_new_window(-1);
                 Main.overview.hide();
+            } else if (Main.overview.visible) {
+                this.app.activate();
+                Main.overview.hide();
             } else {
+                const activeWorkspace = global.workspace_manager.get_active_workspace();
                 let app_windows = this.app
                     .get_windows()
-                    .filter(window => !window.is_override_redirect() && !window.is_attached_dialog() && window.located_on_workspace(global.workspace_manager.get_active_workspace()))
+                    .filter(window => !window.is_override_redirect() && !window.is_attached_dialog() && window.located_on_workspace(activeWorkspace))
                     .sort((w1, w2) => w1.get_id() - w2.get_id());
 
                 switch (app_windows.length) {
@@ -535,26 +539,22 @@ export default class MuelleExtension extends Extension {
                             }
                         }
                     break;
-                    default:
-                        if (Main.overview.visible) {
-                            this.app.activate();
-                            Main.overview.hide();
-                        } else {
-                            let app_has_focus = false;
-                            let app_focused_window_index = 0;
-                            for (var index = 0; index < app_windows.length; index++) {
-                                if (app_windows[index].has_focus()) {
-                                    app_has_focus = true;
-                                    app_focused_window_index = index;
-                                }
+                    default: {
+                        let app_has_focus = false;
+                        let app_focused_window_index = 0;
+                        for (var index = 0; index < app_windows.length; index++) {
+                            if (app_windows[index].has_focus()) {
+                                app_has_focus = true;
+                                app_focused_window_index = index;
                             }
-
-                            if (app_has_focus) {
-                                let next_index = (app_focused_window_index + 1) % app_windows.length;
-                                this.app.activate_window(app_windows[next_index], global.get_current_time());
-                            } else
-                                this.app.activate();
                         }
+
+                        if (app_has_focus) {
+                            let next_index = (app_focused_window_index + 1) % app_windows.length;
+                            this.app.activate_window(app_windows[next_index], global.get_current_time());
+                        } else
+                            this.app.activate();
+                    }
                 }
             }
         };
