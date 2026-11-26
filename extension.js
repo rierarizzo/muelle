@@ -488,7 +488,6 @@ class Dock extends Dash.Dash {
 
         this.disconnectObject(this);
         this._workId = null;
-        super.destroy();
     }
 });
 

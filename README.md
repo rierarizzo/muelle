@@ -31,3 +31,9 @@ After editing the schema, compile it in place:
 ```sh
 glib-compile-schemas schemas
 ```
+
+Run the regression tests:
+
+```sh
+gjs -m tests/run.js
+```
