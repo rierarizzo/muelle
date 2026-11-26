@@ -37,7 +37,17 @@ function makeWindow({
     const win = {
         _minimized: false,
         _activated: 0,
+        _app: null,
+        _iconGeometry: null,
+        iconGeometryCalls: 0,
         get_id: () => id,
+        get_icon_geometry: () => win._iconGeometry
+            ? [true, win._iconGeometry]
+            : [false, new mocks.Mtk.Rectangle()],
+        set_icon_geometry: geometry => {
+            win._iconGeometry = geometry;
+            win.iconGeometryCalls++;
+        },
         get_window_type: () => type,
         showing_on_its_workspace: () => showing,
         is_skip_taskbar: () => skipTaskbar,
@@ -99,7 +109,7 @@ async function loadExtension(repoRoot) {
     const [, bytes] = Gio.File.new_for_path(extPath).load_contents(null);
     let source = byteArray.toString(bytes);
 
-    for (const name of ['Clutter', 'Meta', 'Shell', 'St']) {
+    for (const name of ['Clutter', 'Meta', 'Mtk', 'Shell', 'St']) {
         source = source.replace(
             `import ${name} from 'gi://${name}';`,
             `import {${name}} from '${mocksUrl}';`);
@@ -313,6 +323,39 @@ test('overlap: dialogs trigger auto-hide (#6) and Show Desktop hidden windows do
     assertEqual(dock._hidden, false, 'skip-taskbar window ignored');
 
     ext.disable();
+});
+
+test('minimize: windows target their dock icon and restore geometry', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const dock = ext._dock;
+    const app = {get_id: () => 'test.app'};
+    const icon = new mocks.MockActor({name: 'app-icon'});
+    icon.set_position(100, 200);
+    icon.set_size(64, 64);
+    dock._box = {
+        get_children: () => [{child: {app, icon: {icon}}}],
+    };
+
+    const {win, actor} = makeWindow({id: 40}, mocks);
+    win._app = app;
+    win._iconGeometry = new mocks.Mtk.Rectangle(
+        {x: 1, y: 2, width: 3, height: 4});
+    mocks.env.windowActors.push(actor);
+
+    dock._updateMinimizeGeometry();
+    assertEqual(win._iconGeometry.x, 100, 'minimize target x');
+    assertEqual(win._iconGeometry.y, 200, 'minimize target y');
+    assertEqual(win._iconGeometry.width, 64, 'minimize target width');
+    assertEqual(win._iconGeometry.height, 64, 'minimize target height');
+
+    ext.disable();
+    assertEqual(win._iconGeometry.x, 1, 'original geometry x restored');
+    assertEqual(win._iconGeometry.y, 2, 'original geometry y restored');
+    assertEqual(win._iconGeometry.width, 3, 'original geometry width restored');
+    assertEqual(win._iconGeometry.height, 4, 'original geometry height restored');
 });
 
 test('click: single-window app activates in overview (#4) and caches workspace (#8)', () => {

@@ -112,6 +112,7 @@ export const MockActor = GObject.registerClass({
         this._width = 0;
         this._preferredHeight = 64;
         this.translation_y = 0;
+        this.mapped = true;
         this.opacity = props.opacity ?? 255;
         this.name = props.name ?? '';
         this.destroyCalls = 0;
@@ -171,6 +172,22 @@ export const MockActor = GObject.registerClass({
 
     get_stage() {
         return env.hasStage ? {} : null;
+    }
+
+    get_transformed_position() {
+        return [this._x, this._y];
+    }
+
+    get_transformed_size() {
+        return [this._width, this.height];
+    }
+
+    get_width() {
+        return this._width;
+    }
+
+    get_height() {
+        return this.height;
     }
 
     remove_all_transitions() {
@@ -240,6 +257,19 @@ export const Meta = {
 
 export const Shell = {
     AppState: {STOPPED: 0, STARTING: 1, RUNNING: 2},
+    WindowTracker: {
+        get_default: () => ({
+            get_window_app: window => window._app ?? null,
+        }),
+    },
+};
+
+export const Mtk = {
+    Rectangle: class Rectangle {
+        constructor({x = 0, y = 0, width = 0, height = 0} = {}) {
+            Object.assign(this, {x, y, width, height});
+        }
+    },
 };
 
 export const St = {

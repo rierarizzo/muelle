@@ -12,6 +12,7 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
+import Mtk from 'gi://Mtk';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -25,6 +26,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 const DASH_MAX_HEIGHT_RATIO = 15; // %
 const ANIMATION_TIME = 150; // ms
 const HIDE_DELAY = 300; // ms
+const ICON_GEOMETRY_DELAY = 50; // ms
 const REVEAL_STRIP_HEIGHT = 3; // px
 const SHOW_OVERVIEW_AT_STARTUP = false;
 
@@ -45,11 +47,14 @@ class Dock extends Dash.Dash {
         this._modeInitialized = false;
         this._stripHover = false;
         this._updateTimeoutId = 0;
+        this._iconGeometryTimeoutId = 0;
+        this._strutTimeoutId = 0;
+        this._dockAllocated = false;
         this._windowActors = new Set();
+        this._iconGeometry = new Map();
 
-        Main.layoutManager.addTopChrome(this, {
-            affectsStruts: this._currentMode() === Mode.OFF,
-        });
+        Main.layoutManager.addTopChrome(this);
+        this._strutEnabled = false;
 
         this._dashContainer.set_track_hover(true);
         this._dashContainer.set_reactive(true);
@@ -107,7 +112,17 @@ class Dock extends Dash.Dash {
             this._scheduleUpdate();
         };
         this.connectObject('icon-size-changed', onSizeChanged,
-            'notify::height', onSizeChanged, this);
+            'notify::height', onSizeChanged,
+            'notify::allocation', () => {
+                this._dockAllocated = true;
+                this._scheduleStruts();
+                this._scheduleMinimizeGeometryUpdate();
+            }, this);
+
+        Main.layoutManager.connectObject('startup-complete', () => {
+            this._scheduleStruts();
+            this._scheduleMinimizeGeometryUpdate();
+        }, this);
 
         // Like Dash to Dock: keep our dock visible in the overview and hide
         // the native dash instead. The same actor serves both states, so
@@ -180,20 +195,113 @@ class Dock extends Dash.Dash {
         actor.connectObject(
             'notify::allocation', () => this._scheduleUpdate(),
             'destroy', () => {
+                this._iconGeometry.delete(actor.meta_window);
                 this._windowActors.delete(actor);
                 this._scheduleUpdate();
             }, this);
+    }
+
+    _scheduleMinimizeGeometryUpdate() {
+        if (!this._dockAllocated || this._iconGeometryTimeoutId ||
+            Main.layoutManager._startingUp)
+            return;
+
+        this._iconGeometryTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, ICON_GEOMETRY_DELAY, () => {
+                this._iconGeometryTimeoutId = 0;
+                this._updateMinimizeGeometry();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _updateMinimizeGeometry() {
+        if (!this._box || !this.mapped)
+            return;
+        if (this._box.get_width?.() === 0 || this._box.get_height?.() === 0)
+            return;
+
+        const hiddenOffset = this._hidden ? this.translation_y : 0;
+        const targets = new Map();
+        for (const item of this._box.get_children()) {
+            const appIcon = item.child;
+            const icon = appIcon?.icon?.icon;
+            if (!appIcon?.app || !icon || item.animatingOut)
+                continue;
+            if (!icon.mapped || icon.get_width() === 0 ||
+                icon.get_height() === 0)
+                continue;
+
+            const [x, y] = icon.get_transformed_position();
+            const [width, height] = icon.get_transformed_size();
+            if (!width || !height)
+                continue;
+
+            targets.set(appIcon.app.get_id(), new Mtk.Rectangle({
+                x: Math.round(x),
+                y: Math.round(y - hiddenOffset),
+                width: Math.round(width),
+                height: Math.round(height),
+            }));
+        }
+
+        const tracker = Shell.WindowTracker.get_default();
+        for (const actor of global.get_window_actors()) {
+            const window = actor.meta_window;
+            const app = window && tracker.get_window_app(window);
+            const geometry = app && targets.get(app.get_id());
+            if (!geometry)
+                continue;
+
+            if (!this._iconGeometry.has(window)) {
+                const [success, original] = window.get_icon_geometry();
+                this._iconGeometry.set(window, success ? {
+                    x: original.x,
+                    y: original.y,
+                    width: original.width,
+                    height: original.height,
+                } : null);
+            }
+            window.set_icon_geometry(geometry);
+        }
+    }
+
+    _redisplay() {
+        super._redisplay();
+        this._scheduleMinimizeGeometryUpdate();
     }
 
     _currentMode() {
         return this._settings.get_string('autohide-mode');
     }
 
-    _onModeChanged() {
+    _scheduleStruts() {
+        if (!this._dockAllocated || this._strutTimeoutId ||
+            Main.layoutManager._startingUp)
+            return;
+
+        this._strutTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, ICON_GEOMETRY_DELAY, () => {
+                this._strutTimeoutId = 0;
+                this._syncStruts();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _syncStruts() {
+        if (!this._dockAllocated)
+            return;
+
+        const affectsStruts = this._currentMode() === Mode.OFF;
+        if (this._strutEnabled === affectsStruts)
+            return;
+
         Main.layoutManager.untrackChrome(this);
-        Main.layoutManager.trackChrome(this, {
-            affectsStruts: this._currentMode() === Mode.OFF,
-        });
+        Main.layoutManager.trackChrome(this, {affectsStruts});
+        this._strutEnabled = affectsStruts;
+    }
+
+    _onModeChanged() {
+        this._scheduleStruts();
 
         this._modeInitialized = false;
         this._dock_reposition();
@@ -282,9 +390,11 @@ class Dock extends Dash.Dash {
                 translation_y: 0,
                 duration: ANIMATION_TIME,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onStopped: () => this._scheduleMinimizeGeometryUpdate(),
             });
         } else {
             this.translation_y = 0;
+            this._scheduleMinimizeGeometryUpdate();
         }
     }
 
@@ -407,6 +517,8 @@ class Dock extends Dash.Dash {
         this._revealStrip.set_position(this.work_area.x,
             bottom - REVEAL_STRIP_HEIGHT);
         this._revealStrip.set_size(this.work_area.width, REVEAL_STRIP_HEIGHT);
+
+        this._scheduleMinimizeGeometryUpdate();
     }
 
     _dock_refresh() {
@@ -455,6 +567,21 @@ class Dock extends Dash.Dash {
         for (const actor of this._windowActors)
             actor.disconnectObject(this);
         this._windowActors.clear();
+
+        if (this._iconGeometryTimeoutId) {
+            GLib.source_remove(this._iconGeometryTimeoutId);
+            this._iconGeometryTimeoutId = 0;
+        }
+        if (this._strutTimeoutId) {
+            GLib.source_remove(this._strutTimeoutId);
+            this._strutTimeoutId = 0;
+        }
+
+        for (const [window, geometry] of this._iconGeometry) {
+            window.set_icon_geometry(
+                geometry ? new Mtk.Rectangle(geometry) : null);
+        }
+        this._iconGeometry.clear();
 
         this._cancelUpdate();
 
