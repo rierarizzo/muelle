@@ -13,6 +13,15 @@ Configure with `gnome-extensions prefs muelle@kenethriera`:
 - **When a window overlaps** (default) — hidden only while a window overlaps the dock.
 - **Never** — always visible.
 
+## Dock icon size
+
+Set it with the slider in the preferences window
+(`gnome-extensions prefs muelle@kenethriera`). Defaults to 64 px; the range
+is 8–128 px, with marks at the standard icon sizes.
+
+A fixed size replaces the native Dash sizing, so the dock no longer shrinks
+automatically when many apps are pinned.
+
 ## Differences from upstream
 
 - Supports GNOME Shell 51.

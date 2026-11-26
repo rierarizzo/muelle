@@ -282,6 +282,43 @@ test('auto-hide: drag end re-evaluates visibility (#12) and resize recalculates 
     ext.disable();
 });
 
+test('icon size: defaults to 64, resizes existing icons, and 0 delegates to Dash', () => {
+    mocks.resetEnv(schemaDir);
+    assertEqual(mocks.env.settings.get_int('dock-icon-size'), 64, 'default icon size is the current value');
+
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const dock = ext._dock;
+    const resized = [];
+    dock._box = {
+        get_children: () => [{
+            child: {
+                _delegate: {
+                    icon: {setIconSize: size => resized.push(size)},
+                },
+            },
+        }],
+    };
+    dock._showAppsIcon = {
+        icon: {setIconSize: size => resized.push(size)},
+    };
+
+    mocks.env.settings.set_int('dock-icon-size', 48);
+    flushMainLoop(20);
+    assertEqual(dock.iconSize, 48, 'fixed icon size applied');
+    assertEqual(resized.length, 2, 'app and Show Apps icons resized');
+    assert(resized.every(size => size === 48), 'all icons use the new size');
+
+    const settings = dock._settings;
+    dock._settings = {get_int: () => 0};
+    dock._adjustIconSize();
+    dock._settings = settings;
+    assertEqual(dock.autoAdjustCalls, 1, 'legacy 0 delegates to the native Dash');
+
+    ext.disable();
+});
+
 test('overlap: dialogs trigger auto-hide (#6) and Show Desktop hidden windows do not (#11)', () => {
     mocks.resetEnv(schemaDir);
     mocks.env.settings.set_string('autohide-mode', 'intelligent');

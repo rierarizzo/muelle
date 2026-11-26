@@ -8,6 +8,15 @@
 
   <schema id="org.gnome.shell.extensions.muelle"
           path="/org/gnome/shell/extensions/muelle/">
+    <key name="dock-icon-size" type="i">
+      <default>64</default>
+      <range min="8" max="128"/>
+      <summary>Dock icon size</summary>
+      <description>
+        Icon size in pixels. Defaults to the native Dash size of 64 px.
+      </description>
+    </key>
+
     <key name="autohide-mode"
          enum="org.gnome.shell.extensions.muelle.autohide-mode">
       <default>'intelligent'</default>

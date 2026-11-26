@@ -171,6 +171,8 @@ class Dock extends Dash.Dash {
 
         this._settings.connectObject('changed::autohide-mode',
             () => this._onModeChanged(), this);
+        this._settings.connectObject('changed::dock-icon-size',
+            () => this._adjustIconSize(), this);
 
         Main.overview.connectObject('showing', () => {
             this._cancelUpdate();
@@ -268,6 +270,29 @@ class Dock extends Dash.Dash {
     _redisplay() {
         super._redisplay();
         this._scheduleMinimizeGeometryUpdate();
+    }
+
+    // The native Dash derives the icon size from the dock height and stops at
+    // 64 px. A fixed setting bypasses that ceiling; 0 falls back to native sizing.
+    _adjustIconSize() {
+        const size = this._settings.get_int('dock-icon-size');
+        if (size < 8) {
+            super._adjustIconSize();
+            return;
+        }
+
+        if (size === this.iconSize)
+            return;
+
+        this.iconSize = size;
+        for (const item of this._box.get_children()) {
+            item.child?._delegate?.icon?.setIconSize(size);
+        }
+        this._showAppsIcon?.icon?.setIconSize(size);
+        if (this._separator)
+            this._separator.height = size;
+
+        this.emit('icon-size-changed');
     }
 
     _currentMode() {

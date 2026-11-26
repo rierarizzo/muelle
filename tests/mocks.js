@@ -221,11 +221,18 @@ export const MockDash = GObject.registerClass({
         super._init();
         this._dashContainer = new MockActor({name: 'dashContainer'});
         this.showAppsButton = new MockActor({name: 'showAppsButton'});
+        this.iconSize = 64;
+        this._maxWidth = -1;
         this._maxHeight = -1;
+        this.autoAdjustCalls = 0;
         this._workId = 1;
         this._showLabelTimeoutId = 0;
         this._resetHoverTimeoutId = 0;
         this.endItemDragCalls = 0;
+    }
+
+    _adjustIconSize() {
+        this.autoAdjustCalls++;
     }
 
     setMaxSize(_w, h) {
