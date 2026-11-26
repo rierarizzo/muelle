@@ -8,127 +8,109 @@
     License GPL v3
 */
 
-
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as Layout from 'resource:///org/gnome/shell/ui/layout.js'
 import * as Dash from 'resource:///org/gnome/shell/ui/dash.js';
 import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 
 // Dock settings
 const DASH_MAX_HEIGHT_RATIO = 15; // %
-const AUTO_HIDE_DELAY = 300; // ms
-const SHOWING_ANIMATION_DURATION = 150; // ms
-const HIDING_ANIMATION_DURATION = 150; // ms
+const ANIMATION_TIME = 150; // ms
+const HIDE_DELAY = 300; // ms
+const REVEAL_STRIP_HEIGHT = 3; // px
 const SHOW_OVERVIEW_AT_STARTUP = false;
 
-// Muelle fork: fixed dock for now (no auto-hide or hot edge).
-// The original auto-hide relies on the bottom edge and caused flicker when
-// closing the overview.
-const AUTO_HIDE = false;
-
-// Bottom edge settings
-const HOT_EDGE_PRESSURE_TIMEOUT = 1000; // ms
-const PRESSURE_TRESHOLD = 150;
-
-
-const BottomDock = GObject.registerClass(
-    { Signals: {'toggle-dash': {}}, },
-class BottomDock extends Clutter.Actor {
-    _init(layoutManager, monitor, x, y) {
-        super._init();
-
-        this._monitor = monitor;
-        this._x = x;
-        this._y = y;
-
-        this._pressure_threshold = PRESSURE_TRESHOLD;
-
-        this._pressure_barrier = new Layout.PressureBarrier(
-            this._pressure_threshold,
-            HOT_EDGE_PRESSURE_TIMEOUT,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW);
-
-        this._pressure_barrier.connectObject('trigger', this._toggle_dock.bind(this), this);
-        this.connectObject('destroy', this._on_destroy.bind(this), this);
-    }
-
-    setBarrierSize(size) {
-        if (this._barrier) {
-            this._pressure_barrier.removeBarrier(this._barrier);
-            this._barrier.destroy();
-            this._barrier = null;
-        }
-
-        if (size > 0) {
-            size = this._monitor.width;
-            let x_offset = (this._monitor.width - size) / 2;
-
-            this._barrier = new Meta.Barrier({
-                backend: global.backend,
-                x1: this._x + x_offset, x2: this._x + x_offset + size,
-                y1: this._y, y2: this._y,
-                directions: Meta.BarrierDirection.NEGATIVE_Y});
-            this._pressure_barrier.addBarrier(this._barrier);
-        }
-    }
-
-    _on_destroy() {
-        this.setBarrierSize(0);
-
-        this._pressure_barrier?.destroy();
-        this._pressure_barrier = null;
-
-        super.destroy();
-    }
-
-    _toggle_dock() {
-        if (Main.overview.shouldToggleByCornerOrButton())
-            this.emit('toggle-dash');
-    }
+const Mode = Object.freeze({
+    ON: 'on',
+    INTELLIGENT: 'intelligent',
+    OFF: 'off',
 });
+
 
 const Dock = GObject.registerClass(
 class Dock extends Dash.Dash {
-    _init() {
+    _init(settings) {
         super._init();
 
-        Main.layoutManager.addTopChrome(this);
+        this._settings = settings;
+        this._hidden = false;
+        this._modeInitialized = false;
+        this._stripHover = false;
+        this._updateTimeoutId = 0;
+        this._windowActors = new Set();
 
-        this.showAppsButton.set_toggle_mode(false);
+        Main.layoutManager.addTopChrome(this, {
+            affectsStruts: this._currentMode() === Mode.OFF,
+        });
+
         this._dashContainer.set_track_hover(true);
         this._dashContainer.set_reactive(true);
         this.show();
 
-        this._dock_animated = false;
         this._keep_dock_shown = false;
-        this._dragging;
+        this._dragging = false;
 
-        this._dashContainer.connectObject('notify::hover', this._on_dock_hover.bind(this), this);
-        this._dashContainer.connectObject('scroll-event', (actor, event) => Main.wm.handleWorkspaceScroll(event), this);
-        this.showAppsButton.connectObject('button-release-event', () => Main.overview.showApps(), this);
+        this._dashContainer.connectObject('notify::hover',
+            () => this._onHoverChanged(), this);
+        this._dashContainer.connectObject('scroll-event',
+            (actor, event) => Main.wm.handleWorkspaceScroll(event), this);
+        this.showAppsButton.connectObject('notify::checked', () => {
+            if (Main.overview.visible)
+                this._oldDash.showAppsButton.checked =
+                    this.showAppsButton.checked;
+            else
+                Main.overview.showApps();
+        }, this);
 
-        Main.overview.connectObject('item-drag-begin', () => {this._dragging = true;}, this);
-        Main.overview.connectObject('item-drag-end', () => {this._dragging = false;}, this);
-        global.display.connectObject('workareas-changed', this._dock_refresh.bind(this), this);
-        Main.layoutManager.connectObject('monitors-changed', this._dock_refresh.bind(this), this);
+        // Thin strip at the bottom edge to reveal the dock in on/intelligent
+        // mode, even when a maximized window covers the bottom of the screen.
+        this._revealStrip = new St.Widget({
+            name: 'muelle-reveal',
+            reactive: true,
+            opacity: 0,
+        });
+        Main.layoutManager.addTopChrome(this._revealStrip);
+        this._revealStrip.connectObject('enter-event', () => {
+            this._stripHover = true;
+            this._cancelUpdate();
+            this._updateVisibility(true);
+        }, this);
+        this._revealStrip.connectObject('leave-event', () => {
+            this._stripHover = false;
+            this._scheduleUpdate();
+        }, this);
+
+        Main.overview.connectObject('item-drag-begin',
+            () => { this._dragging = true; }, this);
+        Main.overview.connectObject('item-drag-end',
+            () => { this._dragging = false; }, this);
+        global.display.connectObject('workareas-changed',
+            this._dock_refresh.bind(this), this);
+        Main.layoutManager.connectObject('monitors-changed',
+            this._dock_refresh.bind(this), this);
 
         // The native Dash adjusts icon size lazily; reposition the dock when
         // that happens or it can end up off-screen.
-        this.connectObject('icon-size-changed', () => this._dock_reposition(), this);
-        this.connectObject('notify::height', () => this._dock_reposition(), this);
+        this.connectObject('icon-size-changed',
+            () => this._dock_reposition(), this);
+        this.connectObject('notify::height',
+            () => this._dock_reposition(), this);
 
         // Like Dash to Dock: keep our dock visible in the overview and hide
         // the native dash instead. The same actor serves both states, so
         // there is nothing to swap and no flicker.
         this._oldDash = Main.overview.dash;
         if (this._oldDash) {
+            this._oldDash.showAppsButton.bind_property('checked',
+                this.showAppsButton, 'checked', GObject.BindingFlags.SYNC_CREATE);
             this._oldDash.hide();
             this._oldDash.set_height(1);
             this._oldDash.connectObject('notify::visible',
@@ -145,9 +127,213 @@ class Dock extends Dash.Dash {
                 this.get_preferred_height(...args);
         }
 
+        // Sources that can change the auto-hide/intellihide decision.
+        for (const actor of global.get_window_actors())
+            this._trackWindow(actor);
+
+        global.display.connectObject('restacked',
+            () => this._scheduleUpdate(), this);
+        global.display.connectObject('window-created',
+            () => this._scheduleUpdate(), this);
+        global.window_manager.connectObject(
+            'map', (wm, actor) => {
+                this._trackWindow(actor);
+                this._scheduleUpdate();
+            },
+            'minimize', () => this._scheduleUpdate(),
+            'unminimize', () => this._scheduleUpdate(), this);
+        global.workspace_manager.connectObject('active-workspace-changed',
+            () => this._scheduleUpdate(), this);
+
+        this._settings.connectObject('changed::autohide-mode',
+            () => this._onModeChanged(), this);
+
+        Main.overview.connectObject('showing', () => {
+            this._cancelUpdate();
+            this._revealStrip.hide();
+            this._slideIn(false);
+        }, this);
+        Main.overview.connectObject('hidden', () => {
+            this._updateStripVisibility();
+            this._updateVisibility(false);
+        }, this);
+
         this.connectObject('destroy', this._destroy.bind(this), this);
 
         this._dock_refresh();
+    }
+
+    _trackWindow(actor) {
+        if (this._windowActors.has(actor))
+            return;
+
+        this._windowActors.add(actor);
+        actor.connectObject(
+            'notify::allocation', () => this._scheduleUpdate(),
+            'destroy', () => {
+                this._windowActors.delete(actor);
+                this._scheduleUpdate();
+            }, this);
+    }
+
+    _currentMode() {
+        return this._settings.get_string('autohide-mode');
+    }
+
+    _onModeChanged() {
+        Main.layoutManager.untrackChrome(this);
+        Main.layoutManager.trackChrome(this, {
+            affectsStruts: this._currentMode() === Mode.OFF,
+        });
+
+        this._modeInitialized = false;
+        this._dock_reposition();
+        this._updateStripVisibility();
+        this._updateVisibility(true);
+    }
+
+    _onHoverChanged() {
+        if (this._dashContainer.get_hover()) {
+            this._cancelUpdate();
+            this._updateVisibility(true);
+        } else {
+            this._scheduleUpdate();
+        }
+    }
+
+    _updateStripVisibility() {
+        this._revealStrip.visible =
+            this._currentMode() !== Mode.OFF && !Main.overview.visible;
+    }
+
+    _shouldShow() {
+        if (Main.overview.visible)
+            return true;
+
+        const mode = this._currentMode();
+        if (mode === Mode.OFF)
+            return true;
+
+        if (this._dashContainer.get_hover() || this._stripHover ||
+            this._keep_dock_shown || this._dragging)
+            return true;
+
+        if (mode === Mode.INTELLIGENT)
+            return !this._hasOverlap();
+
+        return false; // Mode.ON
+    }
+
+    _updateVisibility(animate) {
+        if (!this._modeInitialized) {
+            animate = false;
+            this._modeInitialized = true;
+        }
+
+        if (this._shouldShow())
+            this._slideIn(animate);
+        else
+            this._slideOut(animate);
+    }
+
+    _scheduleUpdate(delay = HIDE_DELAY) {
+        if (this._updateTimeoutId)
+            return;
+
+        this._updateTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._updateTimeoutId = 0;
+            this._updateVisibility(true);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _cancelUpdate() {
+        if (this._updateTimeoutId) {
+            GLib.source_remove(this._updateTimeoutId);
+            this._updateTimeoutId = 0;
+        }
+    }
+
+    _dockHeight() {
+        const pref = this.get_preferred_height(this.work_area?.width ?? 0);
+        const height = Array.isArray(pref) ? pref[1] : pref;
+        return Math.max(this.height, height || 0);
+    }
+
+    _slideIn(animate) {
+        if (!this._hidden)
+            return;
+
+        this._hidden = false;
+        this.remove_all_transitions();
+
+        if (animate && this.get_stage()) {
+            this.ease({
+                translation_y: 0,
+                duration: ANIMATION_TIME,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+        } else {
+            this.translation_y = 0;
+        }
+    }
+
+    _slideOut(animate) {
+        if (this._hidden)
+            return;
+
+        const height = this._dockHeight();
+        if (!height)
+            return;
+
+        this._hidden = true;
+        this.remove_all_transitions();
+
+        if (animate && this.get_stage()) {
+            this.ease({
+                translation_y: height + 8,
+                duration: ANIMATION_TIME,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+            });
+        } else {
+            this.translation_y = height + 8;
+        }
+    }
+
+    _hasOverlap() {
+        const area = this.work_area;
+        if (!area)
+            return false;
+
+        const height = this._dockHeight();
+        if (!height)
+            return false;
+
+        const dockTop = area.y + area.height - height;
+        const dockRight = area.x + area.width;
+        const workspace = global.workspace_manager.get_active_workspace();
+
+        for (const actor of global.get_window_actors()) {
+            const window = actor.meta_window;
+            if (!window || window.get_window_type() !== Meta.WindowType.NORMAL)
+                continue;
+            if (window.minimized || window.is_skip_taskbar())
+                continue;
+            if (!window.located_on_workspace(workspace))
+                continue;
+
+            const rect = window.get_frame_rect();
+            const overlaps =
+                rect.x < dockRight &&
+                rect.x + rect.width > area.x &&
+                rect.y < area.y + area.height &&
+                rect.y + rect.height > dockTop;
+
+            if (overlaps)
+                return true;
+        }
+
+        return false;
     }
 
     _itemMenuStateChanged(item, opened) {
@@ -167,80 +353,12 @@ class Dock extends Dash.Dash {
             }
         }
 
-        this._on_dock_hover();
+        this._updateVisibility(false);
     }
 
     _queueRedisplay() {
         if (this._workId)
             Main.queueDeferredWork(this._workId);
-    }
-
-    _on_dock_hover() {
-        if (!this._dashContainer.get_hover() && !this._keep_dock_shown) {
-            this._auto_hide_dock_timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, AUTO_HIDE_DELAY, () => {
-                if (!this._dashContainer.get_hover()) {
-                    this._hide_dock();
-                    this._auto_hide_dock_timeout = 0;
-                }
-            });
-        }
-    }
-
-    _ensure_auto_hide_dock() {
-        if (!this._dashContainer.get_hover() && !this._keep_dock_shown) {
-            this._ensure_auto_hide_dock_timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3 * AUTO_HIDE_DELAY, () => {
-                if (!this._dashContainer.get_hover() && (this._auto_hide_dock_timeout == 0)) {
-                    this._hide_dock();
-                    this._ensure_auto_hide_dock_timeout = 0;
-                }
-            });
-        }
-    }
-
-    _hide_dock() {
-        if (!AUTO_HIDE)
-            return;
-        if (this._dock_animated || !this.work_area || this._dragging)
-            return;
-
-        this._dock_animated = true;
-        this.ease({
-            duration: HIDING_ANIMATION_DURATION,
-            y: this.work_area.y + this.work_area.height,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            onComplete: () => {
-                this._dock_animated = false;
-                this.hide();
-            },
-        });
-    }
-
-    _show_dock() {
-        if (!AUTO_HIDE)
-            return;
-        if (this._dock_animated || !this.work_area)
-            return;
-
-        this.show();
-        this._dock_animated = true;
-        this.ease({
-            duration: SHOWING_ANIMATION_DURATION,
-            y: this.work_area.y + this.work_area.height - this.height,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            onComplete: () => {
-                this._dock_animated = false;
-            },
-        });
-    }
-
-    _toggle_dock() {
-        if (Main.overview.visible)
-            return;
-
-        if (this.is_visible())
-            this._hide_dock();
-        else
-            this._show_dock();
     }
 
     _dock_reposition() {
@@ -254,10 +372,20 @@ class Dock extends Dash.Dash {
         if (!height)
             return;
 
-        if (this.is_visible()) {
-            this.set_position(this.work_area.x,
-                this.work_area.y + this.work_area.height - height);
-        }
+        // A fixed dock must use the monitor bottom to avoid a strut/work-area loop.
+        const monitor = Main.layoutManager.primaryMonitor;
+        const bottom = monitor && this._currentMode() === Mode.OFF
+            ? monitor.y + monitor.height
+            : this.work_area.y + this.work_area.height;
+
+        this.set_position(this.work_area.x, bottom - height);
+
+        if (this._hidden)
+            this.translation_y = height + 8;
+
+        this._revealStrip.set_position(this.work_area.x,
+            bottom - REVEAL_STRIP_HEIGHT);
+        this._revealStrip.set_size(this.work_area.width, REVEAL_STRIP_HEIGHT);
     }
 
     _dock_refresh() {
@@ -283,6 +411,8 @@ class Dock extends Dash.Dash {
         this.set_width(workArea.width);
         this.setMaxSize(workArea.width, this.max_dock_height);
         this._dock_reposition();
+        this._updateStripVisibility();
+        this._updateVisibility(false);
 
         this._dock_refreshing = false;
     }
@@ -292,7 +422,22 @@ class Dock extends Dash.Dash {
         this._dashContainer.disconnectObject(this);
         this.showAppsButton.disconnectObject(this);
         global.display.disconnectObject(this);
+        global.window_manager.disconnectObject(this);
+        global.workspace_manager.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
+        this._settings.disconnectObject(this);
+
+        for (const actor of this._windowActors)
+            actor.disconnectObject(this);
+        this._windowActors.clear();
+
+        this._cancelUpdate();
+
+        if (this._revealStrip) {
+            Main.layoutManager.removeChrome(this._revealStrip);
+            this._revealStrip.destroy();
+            this._revealStrip = null;
+        }
 
         if (this._oldDash) {
             this._oldDash.disconnectObject(this);
@@ -307,60 +452,17 @@ class Dock extends Dash.Dash {
             this._oldDash = null;
         }
 
-        if (this._auto_hide_dock_timeout) {
-            GLib.source_remove(this._auto_hide_dock_timeout);
-            this._auto_hide_dock_timeout = 0;
-        }
-
-        if (this._ensure_auto_hide_dock_timeout) {
-            GLib.source_remove(this._ensure_auto_hide_dock_timeout);
-            this._ensure_auto_hide_dock_timeout = 0;
-        }
-
         this.disconnectObject(this);
         this._workId = null;
         super.destroy();
     }
 });
 
-export default class DockFromDashExtension {
-    constructor() {
-        this._edge_handler_id = null;
-    }
 
-    _update_hot_edges() {
-        for (let i = 0; i < Main.layoutManager.monitors.length; i++) {
-            let monitor = Main.layoutManager.monitors[i];
-            let leftX = monitor.x;
-            let rightX = monitor.x + monitor.width;
-            let bottomY = monitor.y + monitor.height;
-            let size = monitor.width;
-
-            let haveBottom = true;
-
-            for (let j = 0; j < Main.layoutManager.monitors.length; j++) {
-                if (j != i) {
-                    let otherMonitor = Main.layoutManager.monitors[j];
-                    let otherLeftX = otherMonitor.x;
-                    let otherRightX = otherMonitor.x + otherMonitor.width;
-                    let otherTopY = otherMonitor.y;
-                    if (otherTopY >= bottomY && otherLeftX < rightX && otherRightX > leftX) {
-                        haveBottom = false;
-                    }
-                }
-            }
-
-            if (haveBottom) {
-                let edge = new BottomDock(Main.layoutManager, monitor, leftX, bottomY);
-
-                edge.connectObject('toggle-dash', () => this._dock._toggle_dock(), this);
-                edge.connectObject('toggle-dash', () => this._dock._ensure_auto_hide_dock(), this);
-
-                edge.setBarrierSize(size);
-                Main.layoutManager.hotCorners.push(edge);
-            } else
-                Main.layoutManager.hotCorners.push(null);
-        }
+export default class MuelleExtension extends Extension {
+    constructor(metadata) {
+        super(metadata);
+        this._settings = null;
     }
 
     _modify_native_click_behavior() {
@@ -421,34 +523,38 @@ export default class DockFromDashExtension {
                         }
                 }
             }
-        }
+        };
     }
 
     enable() {
+        this._settings = this.getSettings();
         this._modify_native_click_behavior();
 
-        this._dock = new Dock();
+        this._dock = new Dock(this._settings);
 
-        if (AUTO_HIDE) {
-            Main.layoutManager.connectObject('hot-corners-changed', this._update_hot_edges.bind(this), this);
-            Main.layoutManager._updateHotCorners();
-        }
+        // Disable before the shell tears down actors, otherwise restoring the
+        // native dash touches an already disposed object. Same workaround as
+        // Dash to Dock until extensions are disabled on shutdown upstream.
+        this._shutdownId = global.connect('shutdown', () => this.disable());
 
         Main.layoutManager.connectObject('startup-complete', () => {
-                if (!SHOW_OVERVIEW_AT_STARTUP)
-                    Main.overview.hide();
-            }, this);
+            if (!SHOW_OVERVIEW_AT_STARTUP)
+                Main.overview.hide();
+        }, this);
     }
 
     disable() {
+        if (this._shutdownId) {
+            global.disconnect(this._shutdownId);
+            this._shutdownId = null;
+        }
+
         AppDisplay.AppIcon.prototype.activate = this.original_click_function;
 
         Main.layoutManager.disconnectObject(this);
 
         this._dock?.destroy();
         this._dock = null;
-
-        if (AUTO_HIDE)
-            Main.layoutManager._updateHotCorners();
+        this._settings = null;
     }
 }

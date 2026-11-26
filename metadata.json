@@ -2,7 +2,8 @@
   "description": "Lightweight dock based on the GNOME Shell native Dash. Fork of Dock from Dash (GPLv3).",
   "name": "Muelle",
   "shell-version": ["46", "47", "48", "49", "51"],
-  "url": "https://github.com/fthx/dock-from-dash",
+  "settings-schema": "org.gnome.shell.extensions.muelle",
+  "url": "https://github.com/rierarizzo/muelle",
   "uuid": "muelle@kenethriera",
   "version": 999
 }
