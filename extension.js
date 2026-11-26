@@ -1,5 +1,6 @@
 /*
-    Dock from Dash - GNOME Shell 46+ extension
+    Muelle - GNOME Shell dock. Fork of Dock from Dash.
+    Original: Dock from Dash - GNOME Shell 46+ extension
     Copyright Francois Thirioux 2025
     GitHub contributors: @fthx, @rastersoft, @underlinejakez, @lucaxvi, @subpop
     Some ideas picked from GNOME Shell native code
@@ -26,6 +27,11 @@ const AUTO_HIDE_DELAY = 300; // ms
 const SHOWING_ANIMATION_DURATION = 150; // ms
 const HIDING_ANIMATION_DURATION = 150; // ms
 const SHOW_OVERVIEW_AT_STARTUP = false;
+
+// Muelle fork: fixed dock for now (no auto-hide or hot edge).
+// The original auto-hide relies on the bottom edge and caused flicker when
+// closing the overview.
+const AUTO_HIDE = false;
 
 // Bottom edge settings
 const HOT_EDGE_PRESSURE_TIMEOUT = 1000; // ms
@@ -111,8 +117,33 @@ class Dock extends Dash.Dash {
         Main.overview.connectObject('item-drag-begin', () => {this._dragging = true;}, this);
         Main.overview.connectObject('item-drag-end', () => {this._dragging = false;}, this);
         global.display.connectObject('workareas-changed', this._dock_refresh.bind(this), this);
+        Main.layoutManager.connectObject('monitors-changed', this._dock_refresh.bind(this), this);
 
-        Main.overview.connectObject('shown', () => this.hide(), this);
+        // The native Dash adjusts icon size lazily; reposition the dock when
+        // that happens or it can end up off-screen.
+        this.connectObject('icon-size-changed', () => this._dock_reposition(), this);
+        this.connectObject('notify::height', () => this._dock_reposition(), this);
+
+        // Like Dash to Dock: keep our dock visible in the overview and hide
+        // the native dash instead. The same actor serves both states, so
+        // there is nothing to swap and no flicker.
+        this._oldDash = Main.overview.dash;
+        if (this._oldDash) {
+            this._oldDash.hide();
+            this._oldDash.set_height(1);
+            this._oldDash.connectObject('notify::visible',
+                () => this._oldDash.hide(), this);
+            this._oldDash.connectObject('notify::height',
+                () => this._oldDash.set_height(1), this);
+
+            // The overview layout reserves space using the dash's
+            // get_preferred_height(). Since the native dash is hidden, return
+            // the dock height so the workspace area stops above it.
+            this._oldDashOrigGetPreferredHeight =
+                this._oldDash.get_preferred_height;
+            this._oldDash.get_preferred_height = (...args) =>
+                this.get_preferred_height(...args);
+        }
 
         this.connectObject('destroy', this._destroy.bind(this), this);
 
@@ -167,6 +198,8 @@ class Dock extends Dash.Dash {
     }
 
     _hide_dock() {
+        if (!AUTO_HIDE)
+            return;
         if (this._dock_animated || !this.work_area || this._dragging)
             return;
 
@@ -183,6 +216,8 @@ class Dock extends Dash.Dash {
     }
 
     _show_dock() {
+        if (!AUTO_HIDE)
+            return;
         if (this._dock_animated || !this.work_area)
             return;
 
@@ -208,28 +243,46 @@ class Dock extends Dash.Dash {
             this._show_dock();
     }
 
+    _dock_reposition() {
+        if (!this.work_area)
+            return;
+
+        // get_preferred_height() returns [min, natural] on GNOME 45+.
+        // Do not fix our own height: let the Dash compute it.
+        const pref = this.get_preferred_height(this.work_area.width);
+        const height = Array.isArray(pref) ? pref[1] : pref;
+        if (!height)
+            return;
+
+        if (this.is_visible()) {
+            this.set_position(this.work_area.x,
+                this.work_area.y + this.work_area.height - height);
+        }
+    }
+
     _dock_refresh() {
         if (this._dock_refreshing)
             return;
         this._dock_refreshing = true;
 
-        this.work_area = Main.layoutManager.getWorkAreaForMonitor(Main.layoutManager.primaryIndex);
-        if (!this.work_area)
+        const primaryIndex = Main.layoutManager.primaryIndex;
+        if (primaryIndex < 0) {
+            this._dock_refreshing = false;
             return;
+        }
 
-        this.max_dock_height = Math.round(this.work_area.height * DASH_MAX_HEIGHT_RATIO / 100);
-        this.set_width(this.work_area.width);
-        this.set_height(Math.min(this.get_preferred_height(this.work_area.width), this.max_dock_height));
-        this.setMaxSize(this.width, this.max_dock_height);
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(primaryIndex);
+        if (!workArea) {
+            this._dock_refreshing = false;
+            return;
+        }
+        this.work_area = workArea;
 
-        if (this.is_visible())
-            this.set_position(this.work_area.x, this.work_area.y + this.work_area.height - this.height);
-        else
-            this.set_position(this.work_area.x, this.work_area.y + this.work_area.height);
-
-        this.show();
-        if (!this._dashContainer.get_hover())
-            this._hide_dock();
+        this.max_dock_height = Math.round(
+            workArea.height * DASH_MAX_HEIGHT_RATIO / 100);
+        this.set_width(workArea.width);
+        this.setMaxSize(workArea.width, this.max_dock_height);
+        this._dock_reposition();
 
         this._dock_refreshing = false;
     }
@@ -239,6 +292,20 @@ class Dock extends Dash.Dash {
         this._dashContainer.disconnectObject(this);
         this.showAppsButton.disconnectObject(this);
         global.display.disconnectObject(this);
+        Main.layoutManager.disconnectObject(this);
+
+        if (this._oldDash) {
+            this._oldDash.disconnectObject(this);
+            if (this._oldDashOrigGetPreferredHeight) {
+                this._oldDash.get_preferred_height =
+                    this._oldDashOrigGetPreferredHeight;
+                this._oldDashOrigGetPreferredHeight = null;
+            }
+            this._oldDash.show();
+            this._oldDash.set_height(-1);
+            this._oldDash._maxHeight = -1;
+            this._oldDash = null;
+        }
 
         if (this._auto_hide_dock_timeout) {
             GLib.source_remove(this._auto_hide_dock_timeout);
@@ -247,11 +314,10 @@ class Dock extends Dash.Dash {
 
         if (this._ensure_auto_hide_dock_timeout) {
             GLib.source_remove(this._ensure_auto_hide_dock_timeout);
-            this._ensure_auto_hide_dock = 0;
+            this._ensure_auto_hide_dock_timeout = 0;
         }
 
-        this._show_dock();
-
+        this.disconnectObject(this);
         this._workId = null;
         super.destroy();
     }
@@ -363,8 +429,10 @@ export default class DockFromDashExtension {
 
         this._dock = new Dock();
 
-        Main.layoutManager.connectObject('hot-corners-changed', this._update_hot_edges.bind(this), this);
-        Main.layoutManager._updateHotCorners();
+        if (AUTO_HIDE) {
+            Main.layoutManager.connectObject('hot-corners-changed', this._update_hot_edges.bind(this), this);
+            Main.layoutManager._updateHotCorners();
+        }
 
         Main.layoutManager.connectObject('startup-complete', () => {
                 if (!SHOW_OVERVIEW_AT_STARTUP)
@@ -380,6 +448,7 @@ export default class DockFromDashExtension {
         this._dock?.destroy();
         this._dock = null;
 
-        Main.layoutManager._updateHotCorners();
+        if (AUTO_HIDE)
+            Main.layoutManager._updateHotCorners();
     }
 }
