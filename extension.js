@@ -91,7 +91,10 @@ class Dock extends Dash.Dash {
         Main.overview.connectObject('item-drag-begin',
             () => { this._dragging = true; }, this);
         Main.overview.connectObject('item-drag-end',
-            () => { this._dragging = false; }, this);
+            () => {
+                this._dragging = false;
+                this._scheduleUpdate();
+            }, this);
         global.display.connectObject('workareas-changed',
             this._dock_refresh.bind(this), this);
         Main.layoutManager.connectObject('monitors-changed',
@@ -267,6 +270,7 @@ class Dock extends Dash.Dash {
         if (!this._hidden)
             return;
 
+        this.show();
         this._hidden = false;
         this.remove_all_transitions();
 
@@ -297,9 +301,14 @@ class Dock extends Dash.Dash {
                 translation_y: height + 8,
                 duration: ANIMATION_TIME,
                 mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                onStopped: () => {
+                    if (this._hidden)
+                        this.hide();
+                },
             });
         } else {
             this.translation_y = height + 8;
+            this.hide();
         }
     }
 
