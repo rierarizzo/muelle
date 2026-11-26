@@ -150,8 +150,9 @@ class Dock extends Dash.Dash {
             },
             'minimize', () => this._scheduleUpdate(),
             'unminimize', () => this._scheduleUpdate(), this);
-        global.workspace_manager.connectObject('active-workspace-changed',
-            () => this._scheduleUpdate(), this);
+        global.workspace_manager.connectObject(
+            'active-workspace-changed', () => this._scheduleUpdate(),
+            'showing-desktop-changed', () => this._scheduleUpdate(), this);
 
         this._settings.connectObject('changed::autohide-mode',
             () => this._onModeChanged(), this);
@@ -329,9 +330,15 @@ class Dock extends Dash.Dash {
 
         for (const actor of global.get_window_actors()) {
             const window = actor.meta_window;
-            if (!window || window.get_window_type() !== Meta.WindowType.NORMAL)
+            if (!window)
                 continue;
-            if (window.minimized || window.is_skip_taskbar())
+
+            const type = window.get_window_type();
+            if (type !== Meta.WindowType.NORMAL &&
+                type !== Meta.WindowType.DIALOG &&
+                type !== Meta.WindowType.MODAL_DIALOG)
+                continue;
+            if (!window.showing_on_its_workspace() || window.is_skip_taskbar())
                 continue;
             if (!window.located_on_workspace(workspace))
                 continue;
