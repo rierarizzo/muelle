@@ -109,6 +109,9 @@ class Dock extends Dash.Dash {
         // there is nothing to swap and no flicker.
         this._oldDash = Main.overview.dash;
         if (this._oldDash) {
+            this._oldDash.connectObject('destroy', () => {
+                this._oldDash = null;
+            }, this);
             this._oldDash.showAppsButton.bind_property('checked',
                 this.showAppsButton, 'checked', GObject.BindingFlags.SYNC_CREATE);
             this._oldDash.hide();
@@ -418,6 +421,10 @@ class Dock extends Dash.Dash {
     }
 
     _destroy() {
+        if (this._dragging && !this._dragCancelled)
+            this._endItemDrag();
+        this._dragging = false;
+
         Main.overview.disconnectObject(this);
         this._dashContainer.disconnectObject(this);
         this.showAppsButton.disconnectObject(this);
@@ -432,6 +439,15 @@ class Dock extends Dash.Dash {
         this._windowActors.clear();
 
         this._cancelUpdate();
+
+        if (this._showLabelTimeoutId > 0) {
+            GLib.source_remove(this._showLabelTimeoutId);
+            this._showLabelTimeoutId = 0;
+        }
+        if (this._resetHoverTimeoutId > 0) {
+            GLib.source_remove(this._resetHoverTimeoutId);
+            this._resetHoverTimeoutId = 0;
+        }
 
         if (this._revealStrip) {
             Main.layoutManager.removeChrome(this._revealStrip);
@@ -531,6 +547,9 @@ export default class MuelleExtension extends Extension {
         this._modify_native_click_behavior();
 
         this._dock = new Dock(this._settings);
+        this._dock.connectObject('destroy', () => {
+            this._dock = null;
+        }, this);
 
         // Disable before the shell tears down actors, otherwise restoring the
         // native dash touches an already disposed object. Same workaround as

@@ -15,7 +15,7 @@ Configure with `gnome-extensions prefs muelle@kenethriera`:
 
 ## Differences from upstream
 
-- `shell-version` includes 51.
+- Supports GNOME Shell 51.
 - Three auto-hide modes backed by GSettings (see above).
 - The native overview dash is hidden and `get_preferred_height()` is
   overridden so the overview reserves the dock height.
