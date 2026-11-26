@@ -100,12 +100,14 @@ class Dock extends Dash.Dash {
         Main.layoutManager.connectObject('monitors-changed',
             this._dock_refresh.bind(this), this);
 
-        // The native Dash adjusts icon size lazily; reposition the dock when
-        // that happens or it can end up off-screen.
-        this.connectObject('icon-size-changed',
-            () => this._dock_reposition(), this);
-        this.connectObject('notify::height',
-            () => this._dock_reposition(), this);
+        // The native Dash adjusts icon size lazily; reposition the dock and
+        // recompute overlap because its height can change.
+        const onSizeChanged = () => {
+            this._dock_reposition();
+            this._scheduleUpdate();
+        };
+        this.connectObject('icon-size-changed', onSizeChanged,
+            'notify::height', onSizeChanged, this);
 
         // Like Dash to Dock: keep our dock visible in the overview and hide
         // the native dash instead. The same actor serves both states, so
