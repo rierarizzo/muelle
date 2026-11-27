@@ -184,6 +184,18 @@ export const MockActor = GObject.registerClass({
         return [...(this._children ?? [])];
     }
 
+    get_parent() {
+        return this._parent ?? null;
+    }
+
+    contains(descendant) {
+        for (let actor = descendant; actor; actor = actor._parent) {
+            if (actor === this)
+                return true;
+        }
+        return false;
+    }
+
     set_child_at_index(child, index) {
         if (!this._children)
             this._children = [];

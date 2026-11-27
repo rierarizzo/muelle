@@ -622,43 +622,32 @@ test('preview: thumbnails shrink to fit and never collapse', () => {
     ext.disable();
 });
 
-test('preview: retries while the app has no windows yet', () => {
+test('preview: opens only when the pointer moves', () => {
     mocks.resetEnv(schemaDir);
     const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
     ext.enable();
 
     const preview = ext._preview;
-    // Drive _scheduleShow directly; the poll would clobber _hovered here.
     GLib.Source.remove(preview._pollId);
     preview._pollId = 0;
 
-    let windows = [];
-    const icon = {
-        app: {
-            get_name: () => 'Test',
-            get_windows: () => windows,
-        },
-    };
-    const window = {
-        get_title: () => 'Window 1',
-        get_compositor_private: () => ({get_size: () => [1600, 900]}),
-        is_skip_taskbar: () => false,
-        get_user_time: () => 0,
-    };
+    const icon = new mocks.MockActor({name: 'icon'});
+    icon._delegate = {app: {get_name: () => 'Test', get_windows: () => []}};
+    ext._dock.add_child(icon);
 
-    preview._hovered = icon;
-    preview._scheduleShow(icon);
-    flushMainLoop(320);
-    assertEqual(preview._hovered, null, 'hover released so the next poll retries');
-    assertEqual(preview._popup.visible, false, 'no popup without windows');
+    let position = [10, 10];
+    mocks.env.global.get_pointer = () => position;
+    mocks.env.global.stage.get_actor_at_pos = () => icon;
+    preview._pointer = [10, 10];
 
-    windows = [window];
-    preview._hovered = icon;
-    preview._scheduleShow(icon);
-    flushMainLoop(320);
-    assertEqual(preview._popup.visible, true,
-        'popup shown once the window exists, without changing icon');
+    preview._poll();
+    assertEqual(preview._showId, 0, 'resting cursor does not open the preview');
 
+    position = [11, 10];
+    preview._poll();
+    assert(preview._showId > 0, 'moving the cursor schedules the preview');
+
+    preview._cancelShow();
     ext.disable();
 });
 

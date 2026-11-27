@@ -38,6 +38,7 @@ export default class WindowPreview {
         this._hideId = 0;
         this._keyId = 0;
         this._hovered = null;
+        this._pointer = null;
 
         this._content = new St.BoxLayout({
             style_class: 'popup-menu-content dock-preview-content',
@@ -66,6 +67,8 @@ export default class WindowPreview {
     }
 
     enable() {
+        // No preview until the pointer actually moves, not even at startup.
+        this._pointer = global.get_pointer();
         this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, POINTER_POLL_MS, () => {
             this._poll();
             return GLib.SOURCE_CONTINUE;
@@ -112,6 +115,10 @@ export default class WindowPreview {
             return;
 
         const [x, y] = global.get_pointer();
+        const moved = !this._pointer ||
+            this._pointer[0] !== x || this._pointer[1] !== y;
+        this._pointer = [x, y];
+
         const actor = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
 
         if (this._popup.visible && actor && this._popup.contains(actor)) {
@@ -122,10 +129,14 @@ export default class WindowPreview {
         const icon = this._findIcon(actor);
         if (icon) {
             this._cancelHide();
-            if (icon !== this._hovered) {
-                this._hovered = icon;
+            const iconChanged = icon !== this._hovered;
+            this._hovered = icon;
+
+            // Only a real pointer move opens the preview; a window appearing
+            // under a parked cursor must not pop it up on its own.
+            if (moved && (iconChanged || !this._popup.visible))
                 this._scheduleShow(icon);
-            }
+
             return;
         }
 
@@ -154,13 +165,8 @@ export default class WindowPreview {
                 return GLib.SOURCE_REMOVE;
 
             const windows = this._windowsFor(icon.app);
-            if (windows.length === 0) {
-                // App may still be launching; let the next poll retry.
-                this._hovered = null;
-                return GLib.SOURCE_REMOVE;
-            }
-
-            this.show(icon, windows);
+            if (windows.length > 0)
+                this.show(icon, windows);
 
             return GLib.SOURCE_REMOVE;
         });
