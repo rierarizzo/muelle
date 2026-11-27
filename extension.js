@@ -23,6 +23,7 @@ import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import WindowPreview from './windowPreview.js';
 
 
 // Dock settings
@@ -95,6 +96,7 @@ class Dock extends Dash.Dash {
         this._hidden = false;
         this._modeInitialized = false;
         this._stripHover = false;
+        this._previewOpen = false;
         this._updateTimeoutId = 0;
         this._iconGeometryTimeoutId = 0;
         this._strutTimeoutId = 0;
@@ -615,13 +617,28 @@ class Dock extends Dash.Dash {
             return true;
 
         if (this._dashContainer.get_hover() || this._stripHover ||
-            this._keep_dock_shown || this._dragging)
+            this._previewOpen || this._keep_dock_shown || this._dragging)
             return true;
 
         if (mode === Mode.INTELLIGENT)
             return !this._hasOverlap();
 
         return false; // Mode.ON
+    }
+
+    // Keeps the dock on screen while a window preview is open, so the
+    // popup is not left floating over an empty edge.
+    setPreviewOpen(open) {
+        if (this._previewOpen === open)
+            return;
+
+        this._previewOpen = open;
+        if (open) {
+            this._cancelUpdate();
+            this._updateVisibility(true);
+        } else {
+            this._scheduleUpdate();
+        }
     }
 
     _updateVisibility(animate) {
@@ -990,14 +1007,33 @@ export default class MuelleExtension extends Extension {
         };
     }
 
+    // The Dash shows the app name under a hovered icon; with a preview popup
+    // that label would sit behind it.
+    _modify_native_tooltip_behavior() {
+        this.original_should_show_tooltip =
+            AppDisplay.AppIcon.prototype.shouldShowTooltip;
+        const original = this.original_should_show_tooltip;
+
+        AppDisplay.AppIcon.prototype.shouldShowTooltip = function() {
+            if (this instanceof Dash.DashIcon &&
+                this.app.get_windows().some(window => !window.is_skip_taskbar()))
+                return false;
+            return original.call(this);
+        };
+    }
+
     enable() {
         this._settings = this.getSettings();
         this._modify_native_click_behavior();
+        this._modify_native_tooltip_behavior();
 
         this._dock = new Dock(this._settings);
         this._dock.connectObject('destroy', () => {
             this._dock = null;
         }, this);
+
+        this._preview = new WindowPreview(this._dock);
+        this._preview.enable();
 
         // Disable before the shell tears down actors, otherwise restoring the
         // native dash touches an already disposed object. Same workaround as
@@ -1017,8 +1053,13 @@ export default class MuelleExtension extends Extension {
         }
 
         AppDisplay.AppIcon.prototype.activate = this.original_click_function;
+        AppDisplay.AppIcon.prototype.shouldShowTooltip =
+            this.original_should_show_tooltip;
 
         Main.layoutManager.disconnectObject(this);
+
+        this._preview?.destroy();
+        this._preview = null;
 
         this._dock?.destroy();
         this._dock = null;

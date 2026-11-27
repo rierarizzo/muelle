@@ -16,6 +16,7 @@ mkdir -p dist
 gnome-extensions pack --force \
   --out-dir=dist \
   --extra-source=LICENSE \
+  --extra-source=windowPreview.js \
   --schema=schemas/org.gnome.shell.extensions.muelle.gschema.xml \
   .
 
@@ -25,7 +26,7 @@ test -n "$bundle" || {
   exit 1
 }
 
-for file in metadata.json extension.js prefs.js LICENSE; do
+for file in metadata.json extension.js prefs.js windowPreview.js stylesheet.css LICENSE; do
   unzip -Z1 "$bundle" | grep -qx "$file" || {
     echo "Bundle is missing $file" >&2
     exit 1

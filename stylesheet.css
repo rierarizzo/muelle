@@ -1,0 +1,41 @@
+/* Window preview popup. Background, border, radius and shadow come from the
+   shell theme through .popup-menu / .popup-menu-content. */
+
+.dock-preview-content {
+    spacing: 8px;
+    padding: 8px;
+}
+
+.dock-preview-header {
+    font-weight: 700;
+    font-size: 11pt;
+    margin: 2px 4px 0;
+}
+
+.dock-preview-items {
+    spacing: 8px;
+}
+
+.dock-preview-item {
+    border-radius: 12px;
+    padding: 6px;
+    background-color: transparent;
+    transition-duration: 120ms;
+    transition-timing-function: ease-out;
+}
+
+.dock-preview-item:hover,
+.dock-preview-item:focus {
+    background-color: rgba(127, 127, 127, 0.22);
+}
+
+.dock-preview-thumb {
+    border-radius: 8px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    background-color: rgba(0, 0, 0, 0.25);
+}
+
+.dock-preview-title {
+    margin-top: 6px;
+    font-size: 9.5pt;
+}

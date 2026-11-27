@@ -122,6 +122,11 @@ export const MockActor = GObject.registerClass({
         this.showCalls = 0;
         this.transitionsRemoved = 0;
         this.eases = [];
+        this.clutter_text = {
+            ellipsize: 0,
+            single_line_mode: false,
+            line_wrap: false,
+        };
     }
 
     set_track_hover(v) {
@@ -166,10 +171,17 @@ export const MockActor = GObject.registerClass({
         if (!this._children)
             this._children = [];
         this._children.push(child);
+        child._parent = this;
+    }
+
+    remove_child(child) {
+        const index = this._children ? this._children.indexOf(child) : -1;
+        if (index !== -1)
+            this._children.splice(index, 1);
     }
 
     get_children() {
-        return this._children ?? [];
+        return [...(this._children ?? [])];
     }
 
     set_child_at_index(child, index) {
@@ -242,6 +254,8 @@ export const MockActor = GObject.registerClass({
             return;
         this._destroyed = true;
         this.emit('destroy');
+        this._parent?.remove_child(this);
+        this._parent = null;
     }
 });
 attachConnectObject(MockActor.prototype);
@@ -317,6 +331,14 @@ export const Clutter = {
     ModifierType: {CONTROL_MASK: 1 << 2},
     AnimationMode: {EASE_OUT_QUAD: 1, EASE_IN_QUAD: 2},
     ActorAlign: {CENTER: 0, START: 1, END: 2},
+    PickMode: {REACTIVE: 1},
+    Orientation: {HORIZONTAL: 0, VERTICAL: 1},
+    KEY_Escape: 65307,
+    EVENT_PROPAGATE: 0,
+    EVENT_STOP: 1,
+    BinLayout: class {
+    },
+    Clone: MockActor,
     ClickGesture: class {
         constructor() {
         }
@@ -325,6 +347,10 @@ export const Clutter = {
         }
     },
     get_current_event: () => env.currentEvent,
+};
+
+export const Pango = {
+    EllipsizeMode: {NONE: 0, START: 1, MIDDLE: 2, END: 3},
 };
 
 export const Meta = {
@@ -360,6 +386,7 @@ export const St = {
     Button: MockActor,
     Icon: MockActor,
     Label: MockActor,
+    BoxLayout: MockActor,
     Side: {TOP: 0, BOTTOM: 1, LEFT: 2, RIGHT: 3},
 };
 
@@ -381,6 +408,9 @@ export const AppDisplay = {
         prototype: {
             activate: function originalActivate(button) {
                 env.originalActivateCalls.push({icon: this, button});
+            },
+            shouldShowTooltip() {
+                return true;
             },
         },
     },
@@ -501,6 +531,9 @@ export function resetEnv(schemaDir) {
     g.display = display;
     g.window_manager = windowManager;
     g.workspace_manager = workspaceManager;
+    g.stage = new SimpleEmitter('stage');
+    g.stage.get_actor_at_pos = () => null;
+    g.get_pointer = () => [0, 0];
     g.get_window_actors = () => env.windowActors;
     g.get_current_time = () => 12345;
     env.global = g;
@@ -508,6 +541,9 @@ export function resetEnv(schemaDir) {
 
     AppDisplay.AppIcon.prototype.activate = function originalActivate(button) {
         env.originalActivateCalls.push({icon: this, button});
+    };
+    AppDisplay.AppIcon.prototype.shouldShowTooltip = function() {
+        return true;
     };
 }
 
@@ -595,4 +631,42 @@ export const ModalDialog = {
 export const Dash = {
     Dash: MockDash,
     DashItemContainer: MockDashItemContainer,
+    DashIcon: MockActor,
+};
+
+const MockBoxPointer = GObject.registerClass(
+class MockBoxPointer extends MockActor {
+    _init() {
+        super._init({name: 'box-pointer'});
+        this.bin = new MockActor({name: 'box-pointer-bin'});
+        this.arrowSide = St.Side.BOTTOM;
+    }
+
+    add_style_class_name(_name) {
+    }
+
+    setPosition(_sourceActor, _alignment) {
+    }
+
+    queue_relayout() {
+    }
+
+    contains(_actor) {
+        return false;
+    }
+
+    open(_animate) {
+        this.visible = true;
+    }
+
+    close(_animate, onComplete) {
+        this.visible = false;
+        if (onComplete)
+            onComplete();
+    }
+});
+
+export const BoxPointer = {
+    BoxPointer: MockBoxPointer,
+    PopupAnimation: {NONE: 0, SLIDE: 1, FADE: 2, FULL: ~0},
 };

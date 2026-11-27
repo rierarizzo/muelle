@@ -102,38 +102,51 @@ function makeAppIcon(windows, {
     };
 }
 
-async function loadExtension(repoRoot) {
-    const mocksPath = GLib.build_filenamev([repoRoot, 'tests', 'mocks.js']);
-    const mocksUrl = Gio.File.new_for_path(mocksPath).get_uri();
-    const extPath = GLib.build_filenamev([repoRoot, 'extension.js']);
-    const [, bytes] = Gio.File.new_for_path(extPath).load_contents(null);
-    let source = byteArray.toString(bytes);
-
-    for (const name of ['Clutter', 'Meta', 'Mtk', 'Shell', 'St']) {
+function rewriteImports(source, mocksUrl) {
+    for (const name of ['Clutter', 'Meta', 'Mtk', 'Pango', 'Shell', 'St']) {
         source = source.replace(
             `import ${name} from 'gi://${name}';`,
             `import {${name}} from '${mocksUrl}';`);
     }
 
     source = source.replace(
-        /import \* as (Main|Dash|AppDisplay|ModalDialog|PopupMenu) from 'resource:\/\/\/org\/gnome\/shell\/ui\/[^']+';/g,
+        /import \* as (Main|Dash|AppDisplay|BoxPointer|ModalDialog|PopupMenu) from 'resource:\/\/\/org\/gnome\/shell\/ui\/[^']+';/g,
         `import {$1} from '${mocksUrl}';`);
-    source = source.replace(
+
+    return source.replace(
         `'resource:///org/gnome/shell/extensions/extension.js'`,
         `'${mocksUrl}'`);
+}
 
+async function loadExtension(repoRoot) {
+    const mocksPath = GLib.build_filenamev([repoRoot, 'tests', 'mocks.js']);
+    const mocksUrl = Gio.File.new_for_path(mocksPath).get_uri();
     const tmpDir = GLib.dir_make_tmp('muelle-test-XXXXXX');
-    const tmpExt = GLib.build_filenamev([tmpDir, 'extension.js']);
-    Gio.File.new_for_path(tmpExt).replace_contents(
-        source, null, false, Gio.FileCreateFlags.REPLACE_CREATION, null);
+    const files = ['extension.js', 'windowPreview.js'];
 
     try {
+        for (const name of files) {
+            const [, bytes] = Gio.File.new_for_path(
+                GLib.build_filenamev([repoRoot, name])).load_contents(null);
+            Gio.File.new_for_path(GLib.build_filenamev([tmpDir, name]))
+                .replace_contents(
+                    rewriteImports(byteArray.toString(bytes), mocksUrl),
+                    null, false, Gio.FileCreateFlags.REPLACE_CREATION, null);
+        }
+
         const mocks = await import(mocksUrl);
-        const mod = await import(Gio.File.new_for_path(tmpExt).get_uri());
+        const mod = await import(
+            Gio.File.new_for_path(GLib.build_filenamev([tmpDir, 'extension.js'])).get_uri());
         return {MuelleExtension: mod.default, mocks};
     } finally {
+        for (const name of files) {
+            try {
+                Gio.File.new_for_path(GLib.build_filenamev([tmpDir, name])).delete(null);
+            } catch (_e) {
+                // ignore cleanup errors
+            }
+        }
         try {
-            Gio.File.new_for_path(tmpExt).delete(null);
             Gio.File.new_for_path(tmpDir).delete(null);
         } catch (_e) {
             // ignore cleanup errors
@@ -535,6 +548,76 @@ test('click: single-window app activates in overview (#4) and caches workspace (
     assertEqual(mocks.env.workspaceLookupCount, 1, 'active workspace queried once per click (#8)');
     assertEqual(multiIcon.app.activatedWindows.length, 1, 'next window activated');
     assertEqual(multiIcon.app.activatedWindows[0].win, wB, 'cycled to next window');
+
+    ext.disable();
+});
+
+test('preview: open preview keeps the dock shown and is torn down', () => {
+    mocks.resetEnv(schemaDir);
+    mocks.env.settings.set_string('autohide-mode', 'on');
+    const originalTooltip = mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip;
+
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const dock = ext._dock;
+    assert(ext._preview !== null, 'preview created on enable');
+    assert(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip !== originalTooltip,
+        'dash tooltip suppressed while previewing');
+
+    const icon = new mocks.Dash.DashIcon();
+    icon.app = {get_windows: () => [{is_skip_taskbar: () => false}]};
+    assertEqual(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip.call(icon), false,
+        'tooltip hidden for icons with previewable windows');
+    icon.app = {get_windows: () => [{is_skip_taskbar: () => true}]};
+    assertEqual(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip.call(icon), true,
+        'tooltip kept for icons without previewable windows');
+
+    assertEqual(dock._hidden, true, 'dock hidden without hover');
+
+    dock.setPreviewOpen(true);
+    assertEqual(dock._shouldShow(), true, 'dock shown while the preview is open');
+    assertEqual(dock._hidden, false, 'dock slides in with the preview open');
+
+    dock.setPreviewOpen(false);
+    assert(dock._updateTimeoutId > 0, 'visibility re-evaluated after the preview closes');
+    flushMainLoop(340);
+    assertEqual(dock._hidden, true, 'dock hides again once the preview is closed');
+
+    const popup = ext._preview._popup;
+    ext.disable();
+    assertEqual(ext._preview, null, 'preview cleared on disable');
+    assertEqual(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip, originalTooltip,
+        'dash tooltip restored on disable');
+    assert(mocks.env.removedChrome.includes(popup),
+        'preview popup removed from chrome');
+    assertEqual(dock._hidden, true, 'preview teardown does not reveal the dock');
+});
+
+test('preview: thumbnails shrink to fit and never collapse', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const preview = ext._preview;
+    const icon = new mocks.Dash.DashIcon();
+    icon.app = {get_name: () => 'Test', get_windows: () => []};
+
+    const windowsFor = count => Array.from({length: count}, (_, index) => ({
+        get_title: () => `Window ${index}`,
+        get_compositor_private: () => ({get_size: () => [1600, 900]}),
+    }));
+
+    const thumbWidth = count => {
+        preview.show(icon, windowsFor(count));
+        const row = preview._content.get_children()[1];
+        const item = row.get_children()[0];
+        return item.child.get_children()[0].get_width();
+    };
+
+    assertEqual(thumbWidth(3), 200, 'full width for a few windows');
+    assertEqual(thumbWidth(10), 169, 'shrinks to fit with ten windows');
+    assertEqual(thumbWidth(300), 96, 'never collapses below 96px');
 
     ext.disable();
 });
