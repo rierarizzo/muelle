@@ -622,6 +622,46 @@ test('preview: thumbnails shrink to fit and never collapse', () => {
     ext.disable();
 });
 
+test('preview: retries while the app has no windows yet', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const preview = ext._preview;
+    // Drive _scheduleShow directly; the poll would clobber _hovered here.
+    GLib.Source.remove(preview._pollId);
+    preview._pollId = 0;
+
+    let windows = [];
+    const icon = {
+        app: {
+            get_name: () => 'Test',
+            get_windows: () => windows,
+        },
+    };
+    const window = {
+        get_title: () => 'Window 1',
+        get_compositor_private: () => ({get_size: () => [1600, 900]}),
+        is_skip_taskbar: () => false,
+        get_user_time: () => 0,
+    };
+
+    preview._hovered = icon;
+    preview._scheduleShow(icon);
+    flushMainLoop(320);
+    assertEqual(preview._hovered, null, 'hover released so the next poll retries');
+    assertEqual(preview._popup.visible, false, 'no popup without windows');
+
+    windows = [window];
+    preview._hovered = icon;
+    preview._scheduleShow(icon);
+    flushMainLoop(320);
+    assertEqual(preview._popup.visible, true,
+        'popup shown once the window exists, without changing icon');
+
+    ext.disable();
+});
+
 let failed = 0;
 for (const t of tests) {
     try {

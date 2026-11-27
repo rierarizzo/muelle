@@ -154,8 +154,13 @@ export default class WindowPreview {
                 return GLib.SOURCE_REMOVE;
 
             const windows = this._windowsFor(icon.app);
-            if (windows.length > 0)
-                this.show(icon, windows);
+            if (windows.length === 0) {
+                // App may still be launching; let the next poll retry.
+                this._hovered = null;
+                return GLib.SOURCE_REMOVE;
+            }
+
+            this.show(icon, windows);
 
             return GLib.SOURCE_REMOVE;
         });
