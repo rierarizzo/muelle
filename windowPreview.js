@@ -167,6 +167,8 @@ export default class WindowPreview {
             const windows = this._windowsFor(icon.app);
             if (windows.length > 0)
                 this.show(icon, windows);
+            else
+                this.hide(); // do not keep the previous icon's preview open
 
             return GLib.SOURCE_REMOVE;
         });

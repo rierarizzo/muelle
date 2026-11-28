@@ -691,6 +691,52 @@ test('preview: opens only when the pointer moves', () => {
     ext.disable();
 });
 
+test('preview: closes when the pointer moves to an app without windows', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const preview = ext._preview;
+    GLib.Source.remove(preview._pollId);
+    preview._pollId = 0;
+
+    const window = {
+        is_skip_taskbar: () => false,
+        get_user_time: () => 1,
+        get_title: () => 'Test window',
+        get_compositor_private: () => ({get_size: () => [1600, 900]}),
+    };
+    const openIcon = new mocks.MockActor({name: 'open-icon'});
+    openIcon._delegate = {
+        app: {get_name: () => 'Open', get_windows: () => [window]},
+    };
+    const closedIcon = new mocks.MockActor({name: 'closed-icon'});
+    closedIcon._delegate = {
+        app: {get_name: () => 'Closed', get_windows: () => []},
+    };
+    ext._dock.add_child(openIcon);
+    ext._dock.add_child(closedIcon);
+
+    let position = [10, 10];
+    mocks.env.global.get_pointer = () => position;
+    mocks.env.global.stage.get_actor_at_pos = () => openIcon;
+    preview._pointer = [10, 10];
+
+    position = [11, 10];
+    preview._poll();
+    flushMainLoop(300);
+    assertEqual(preview._popup.visible, true, 'preview shown for the open app');
+
+    mocks.env.global.stage.get_actor_at_pos = () => closedIcon;
+    position = [12, 10];
+    preview._poll();
+    flushMainLoop(300);
+    assertEqual(preview._popup.visible, false,
+        'preview closed after moving to an app without windows');
+
+    ext.disable();
+});
+
 let failed = 0;
 for (const t of tests) {
     try {
