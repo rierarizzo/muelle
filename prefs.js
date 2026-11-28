@@ -84,6 +84,16 @@ export default class MuellePreferences extends ExtensionPreferences {
         sizeRow.add_suffix(sizeScale);
         group.add(sizeRow);
 
+        const previewsRow = new Adw.SwitchRow({
+            title: 'Window previews',
+            subtitle: 'Show window thumbnails when hovering a dock icon',
+        });
+        previewsRow.active = settings.get_boolean('show-window-previews');
+        previewsRow.connect('notify::active', () => {
+            settings.set_boolean('show-window-previews', previewsRow.active);
+        });
+        group.add(previewsRow);
+
         page.add(group);
 
         const itemsGroup = new Adw.PreferencesGroup({

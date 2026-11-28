@@ -31,10 +31,11 @@ confirmation first.
 
 ## Window previews
 
-Hovering a dock icon for a moment opens a native popover with the app name and
-thumbnails of its open windows. Clicking a thumbnail activates that window;
-**Esc** closes the preview. The dock stays visible while the preview is open,
-in every auto-hide mode.
+**Window previews** in the preferences enables or disables them (enabled by
+default). Hovering a dock icon for a moment opens a native popover with the
+app name and thumbnails of its open windows. Clicking a thumbnail activates
+that window; **Esc** closes the preview. The dock stays visible while the
+preview is open, in every auto-hide mode.
 
 Tune the hover delay, hide delay and thumbnail size with the constants at the
 top of `windowPreview.js`. Ported and trimmed from

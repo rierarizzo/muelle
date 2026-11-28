@@ -16,6 +16,14 @@
       </description>
     </key>
 
+    <key name="show-window-previews" type="b">
+      <default>true</default>
+      <summary>Show window previews</summary>
+      <description>
+        Show a window thumbnail popover when hovering over a dock icon.
+      </description>
+    </key>
+
     <key name="dock-icon-size" type="i">
       <default>64</default>
       <range min="8" max="128"/>

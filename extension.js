@@ -1022,9 +1022,10 @@ export default class MuelleExtension extends Extension {
         this.original_should_show_tooltip =
             AppDisplay.AppIcon.prototype.shouldShowTooltip;
         const original = this.original_should_show_tooltip;
+        const extension = this;
 
         AppDisplay.AppIcon.prototype.shouldShowTooltip = function() {
-            if (this instanceof Dash.DashIcon &&
+            if (this instanceof Dash.DashIcon && extension._preview &&
                 this.app.get_windows().some(window => !window.is_skip_taskbar()))
                 return false;
             return original.call(this);
@@ -1041,8 +1042,10 @@ export default class MuelleExtension extends Extension {
             this._dock = null;
         }, this);
 
-        this._preview = new WindowPreview(this._dock);
-        this._preview.enable();
+        this._preview = null;
+        this._syncPreview();
+        this._settings.connectObject('changed::show-window-previews',
+            () => this._syncPreview(), this);
 
         // Disable before the shell tears down actors, otherwise restoring the
         // native dash touches an already disposed object. Same workaround as
@@ -1053,6 +1056,22 @@ export default class MuelleExtension extends Extension {
             if (!SHOW_OVERVIEW_AT_STARTUP)
                 Main.overview.hide();
         }, this);
+    }
+
+    _syncPreview() {
+        const enabled = this._settings.get_boolean('show-window-previews');
+        if (enabled === Boolean(this._preview))
+            return;
+
+        if (enabled) {
+            this._preview = new WindowPreview(this._dock);
+            this._preview.enable();
+            return;
+        }
+
+        this._preview.hide(true);
+        this._preview.destroy();
+        this._preview = null;
     }
 
     disable() {
@@ -1066,6 +1085,7 @@ export default class MuelleExtension extends Extension {
             this.original_should_show_tooltip;
 
         Main.layoutManager.disconnectObject(this);
+        this._settings?.disconnectObject(this);
 
         this._preview?.destroy();
         this._preview = null;

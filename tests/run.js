@@ -399,6 +399,34 @@ test('dock items: keep their natural width while the dock animates', () => {
     ext.disable();
 });
 
+test('preview: setting toggles hover previews', () => {
+    mocks.resetEnv(schemaDir);
+    assertEqual(mocks.env.settings.get_boolean('show-window-previews'), true,
+        'previews enabled by default');
+
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+    assert(ext._preview !== null, 'preview created on enable');
+
+    const icon = new mocks.Dash.DashIcon();
+    icon.app = {get_windows: () => [{is_skip_taskbar: () => false}]};
+
+    mocks.env.settings.set_boolean('show-window-previews', false);
+    flushMainLoop(20);
+    assertEqual(ext._preview, null, 'preview disabled by setting');
+    assertEqual(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip.call(icon), true,
+        'app label shown for open apps without previews');
+
+    mocks.env.settings.set_boolean('show-window-previews', true);
+    flushMainLoop(20);
+    assert(ext._preview !== null, 'preview restored by setting');
+    assertEqual(mocks.AppDisplay.AppIcon.prototype.shouldShowTooltip.call(icon), false,
+        'app label hidden again while previewing');
+
+    ext.disable();
+    assertEqual(ext._preview, null, 'preview cleared on disable');
+});
+
 test('trash: setting toggles the item and the icon reflects the trash state', () => {
     mocks.resetEnv(schemaDir);
     assertEqual(mocks.env.settings.get_boolean('show-trash'), true,
