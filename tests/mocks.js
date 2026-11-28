@@ -306,6 +306,10 @@ export const MockDash = GObject.registerClass({
         this.endItemDragCalls++;
     }
 
+    _createAppItem(_app) {
+        return new MockDashItemContainer();
+    }
+
     _redisplay() {
     }
 });

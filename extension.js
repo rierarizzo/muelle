@@ -390,6 +390,15 @@ class Dock extends Dash.Dash {
         this.emit('icon-size-changed');
     }
 
+    _createAppItem(app) {
+        const item = super._createAppItem(app);
+        // Like Dash to Dock: horizontal dock items must not expand, or the
+        // width animation stretches their cells and the icons slide over
+        // each other while the dock shrinks.
+        item.x_expand = false;
+        return item;
+    }
+
     _initTrash() {
         this._trashItem = new TrashItem(this.iconSize);
         this._trashItem.button.connect('clicked', () => this._openTrash());

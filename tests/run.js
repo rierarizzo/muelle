@@ -387,6 +387,18 @@ test('dock width: animates growth and shrink, then restores natural sizing', () 
     ext.disable();
 });
 
+test('dock items: keep their natural width while the dock animates', () => {
+    mocks.resetEnv(schemaDir);
+    const ext = new MuelleExtension({uuid: 'muelle@kenethriera'});
+    ext.enable();
+
+    const item = ext._dock._createAppItem({});
+    assertEqual(item.x_expand, false,
+        'dock items do not expand horizontally');
+
+    ext.disable();
+});
+
 test('trash: setting toggles the item and the icon reflects the trash state', () => {
     mocks.resetEnv(schemaDir);
     assertEqual(mocks.env.settings.get_boolean('show-trash'), true,
